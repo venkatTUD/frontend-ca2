@@ -1,0 +1,69 @@
+name: Docker Image CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  DOCKER_REGISTRY: docker.io
+  IMAGE_NAME: receipt-frontend
+  DO_CLUSTER_NAME: your-cluster-name
+  SHORT_SHA: ${{ github.sha }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # Step 1: Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      # Step 2: Login to Docker Hub
+      - name: Login to Docker Hub
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DOCKERHUB_USERID }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Step 3: Set up Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+
+      # Step 4: Build and push Docker image
+      - name: Build and push
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          push: true
+          tags: |
+            venkatakurathitud/${{ env.IMAGE_NAME }}:latest
+            venkatakurathitud/${{ env.IMAGE_NAME }}:${{ env.SHORT_SHA }}
+
+      # Step 5: Install doctl
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      # Step 6: Configure kubectl
+      - name: Configure kubectl
+        run: doctl kubernetes cluster kubeconfig save ${{ env.DO_CLUSTER_NAME }}
+
+      # Step 7: Deploy to Kubernetes
+      - name: Deploy to Kubernetes
+        run: |
+          # Apply Kubernetes configurations
+          kubectl apply -f kubernetes/deployment.yaml
+          kubectl apply -f kubernetes/service.yaml
+          
+          # Update deployment image
+          kubectl set image deployment/receipt-frontend receipt-frontend=venkatakurathitud/${{ env.IMAGE_NAME }}:${{ env.SHORT_SHA }}
+          
+          # Force a new deployment
+          kubectl scale deployment/receipt-frontend --replicas=0
+          kubectl scale deployment/receipt-frontend --replicas=1
+          
+          # Wait for rollout to complete
+          kubectl rollout status deployment/receipt-frontend

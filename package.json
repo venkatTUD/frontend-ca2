@@ -1,0 +1,21 @@
+{
+  "name": "bp_web_app",
+  "version": "1.0.0",
+  "description": "BP Node.js FE for Docker",
+  "author": "Omar Portillo",
+  "main": "fe-server.js",
+  "scripts": {
+    "start": "node fe-server.js",
+    "test": "mocha --exit"
+  },
+  "dependencies": {
+    "mongodb": "^3.1.13",
+    "request": "^2.81.0",
+    "sinon": "^15.0.4"
+  },
+  "test-unit": "NODE_ENV=test mocha '/**/*.spec.js'",
+  "devDependencies": {
+    "chai": "^4.3.7",
+    "mocha": "^10.2.0"
+  }
+}
