@@ -7,10 +7,10 @@ on:
     branches: [ "main" ]
 
 env:
-  DOCKER_REGISTRY: docker.io
   IMAGE_NAME: receipt-frontend
-  DO_CLUSTER_NAME: your-cluster-name
-  SHORT_SHA: ${{ github.sha }}
+  DOCKER_REGISTRY: docker.io
+  SONAR_HOST_URL: https://sonarcloud.io
+  DO_CLUSTER_NAME: receipt-cluster
 
 jobs:
   build:
