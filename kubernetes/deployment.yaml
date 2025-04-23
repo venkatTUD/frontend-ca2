@@ -19,7 +19,7 @@ spec:
         - containerPort: 22137
         env:
         - name: WEBSERVICE_HOST
-          value: receipt-backend-service
+          value: "receipt-backend-service"
         - name: WEBSERVICE_PORT
           value: "80"
         - name: EXPOSED_PORT
