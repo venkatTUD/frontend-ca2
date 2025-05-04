@@ -43,12 +43,13 @@ const envLabel = process.env.ENV_LABEL || 'unknown'; // Set in deployment YAML (
 
 // Helper function to forward requests to backend
 const forwardToBackend = (path, method, data = null) => {
-    path = path.replace('/api/v1', '');
+    // Remove /api/v1 or /api prefixes, use direct path (e.g., /recipes)
+    path = path.replace(/^\/api\/v1\/|^\/api\//, '');
     return new Promise((resolve, reject) => {
         const options = {
             hostname: global.gConfig.webservice_host,
             port: global.gConfig.webservice_port,
-            path: path,
+            path: `/${path}`, // Ensure path starts with /
             method: method,
             headers: {
                 'Content-Type': 'application/json'
@@ -125,7 +126,7 @@ api_up{env="${envLabel}"} ${apiUp}
         // Handle GET requests
         if (req.method === 'GET') {
             if (req.url === '/' || req.url === '/recipes') {
-                const response = await forwardToBackend('/recipes', 'GET');
+                const response = await forwardToBackend('recipes', 'GET');
                 let tableContent = '';
                 
                 if (response.data && Array.isArray(response.data)) {
@@ -141,8 +142,9 @@ api_up{env="${envLabel}"} ${apiUp}
                 res.end();
             }
             // Forward other GET requests to backend
-            else if (req.url.startsWith('/api/v1/')) {
-                const response = await forwardToBackend(req.url, 'GET');
+            else if (req.url.startsWith('/api/')) {
+                const path = req.url.replace(/^\/api\//, '');
+                const response = await forwardToBackend(path, 'GET');
                 res.writeHead(response.statusCode, {'Content-Type': 'application/json'});
                 res.write(JSON.stringify(response.data));
                 res.end();
@@ -165,7 +167,7 @@ api_up{env="${envLabel}"} ${apiUp}
                             prepTimeInMinutes: parseInt(post.prepTimeInMinutes)
                         };
 
-                        await forwardToBackend('/recipe', 'POST', recipeData);
+                        await forwardToBackend('recipe', 'POST', recipeData);
                         
                         res.writeHead(302, { Location: '/' });
                         res.end();
@@ -178,7 +180,7 @@ api_up{env="${envLabel}"} ${apiUp}
                 });
             }
             // Forward other POST requests to backend
-            else if (req.url.startsWith('/api/v1/')) {
+            else if (req.url.startsWith('/api/')) {
                 let body = '';
                 req.on('data', chunk => {
                     body += chunk.toString();
@@ -187,7 +189,8 @@ api_up{env="${envLabel}"} ${apiUp}
                 req.on('end', async () => {
                     try {
                         const data = body ? JSON.parse(body) : null;
-                        const response = await forwardToBackend(req.url, 'POST', data);
+                        const path = req.url.replace(/^\/api\//, '');
+                        const response = await forwardToBackend(path, 'POST', data);
                         res.writeHead(response.statusCode, {'Content-Type': 'application/json'});
                         res.write(JSON.stringify(response.data));
                         res.end();
