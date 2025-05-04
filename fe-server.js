@@ -20,8 +20,8 @@ console.log('webservice_port:', config.webservice_port);
 console.log(`Starting server on port ${global.gConfig.exposedPort}`);
 console.log(`Will connect to backend at ${global.gConfig.webservice_host}:${global.gConfig.webservice_port}`);
 
-// Load CSS
-const css = fs.readFileSync('./public/default.css', 'utf8');
+// Load CSS (create if not exists)
+const css = fs.existsSync('./public/default.css') ? fs.readFileSync('./public/default.css', 'utf8') : 'body { font-family: Arial; }';
 
 // HTML templates
 const header = '<!doctype html><html><head><style>' + css + '</style></head>';
@@ -36,9 +36,13 @@ const startTable = '<div id="space"></div><div id="logo">Your Previous Recipes</
 const endTable = '</div>';
 const endBody = '</div></body></html>';
 
+// Health metrics
+let frontendUp = 1; // 1 = up, 0 = down
+let apiUp = 1; // 1 = up, 0 = down for /recipes
+const envLabel = process.env.ENV_LABEL || 'unknown'; // Set in deployment YAML (blue or green)
+
 // Helper function to forward requests to backend
 const forwardToBackend = (path, method, data = null) => {
-    // Remove /api/v1 prefix as backend doesn't use it
     path = path.replace('/api/v1', '');
     return new Promise((resolve, reject) => {
         const options = {
@@ -61,12 +65,18 @@ const forwardToBackend = (path, method, data = null) => {
             backendRes.on('end', () => {
                 console.log(`Backend response (${method} ${path}):`, responseData);
                 try {
+                    if (backendRes.statusCode >= 200 && backendRes.statusCode < 300) {
+                        apiUp = 1;
+                    } else {
+                        apiUp = 0;
+                    }
                     resolve({
                         statusCode: backendRes.statusCode,
                         data: responseData ? JSON.parse(responseData) : null
                     });
                 } catch (err) {
                     console.error('Error parsing backend response:', err);
+                    apiUp = 0;
                     reject(err);
                 }
             });
@@ -74,6 +84,7 @@ const forwardToBackend = (path, method, data = null) => {
 
         backendReq.on('error', (error) => {
             console.error(`Backend error (${method} ${path}):`, error);
+            apiUp = 0;
             reject(error);
         });
 
@@ -95,6 +106,21 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // Handle metrics endpoint for Prometheus
+    if (req.url === '/metrics') {
+        res.writeHead(200, {'Content-Type': 'text/plain'});
+        res.write(`
+# HELP frontend_up Whether the frontend is up (1) or down (0)
+# TYPE frontend_up gauge
+frontend_up{env="${envLabel}"} ${frontendUp}
+# HELP api_up Whether the backend API is up (1) or down (0)
+# TYPE api_up gauge
+api_up{env="${envLabel}"} ${apiUp}
+        `);
+        res.end();
+        return;
+    }
+
     try {
         // Handle GET requests
         if (req.method === 'GET') {
@@ -110,6 +136,7 @@ const server = http.createServer(async (req, res) => {
                 }
 
                 res.writeHead(200, {'Content-Type': 'text/html'});
+                frontendUp = 1;
                 res.write(header + startBody + form + startTable + tableContent + endTable + endBody);
                 res.end();
             }
@@ -140,7 +167,6 @@ const server = http.createServer(async (req, res) => {
 
                         await forwardToBackend('/recipe', 'POST', recipeData);
                         
-                        // Redirect back to home page to see updated list
                         res.writeHead(302, { Location: '/' });
                         res.end();
                     } catch (error) {
@@ -175,6 +201,7 @@ const server = http.createServer(async (req, res) => {
         }
     } catch (error) {
         console.error('Server error:', error);
+        frontendUp = 0;
         res.writeHead(500, {'Content-Type': 'text/html'});
         res.write(header + startBody + 'Internal server error: ' + error.message + endBody);
         res.end();

@@ -27,6 +27,8 @@ spec:
              value: "80"
            - name: EXPOSED_PORT
              value: "22137"
+           - name: ENV_LABEL
+             value: "blue"
            livenessProbe:
              httpGet:
                path: /
