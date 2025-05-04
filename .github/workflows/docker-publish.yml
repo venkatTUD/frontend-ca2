@@ -96,12 +96,19 @@ jobs:
           kubectl describe pod -l app=mongodb -n default
           kubectl logs -l app=mongodb -n default
 
-          # Port-forward to test
+          # Test backend directly
+          BACKEND_POD=$(kubectl get pods -l app=receipt-backend -n default -o jsonpath="{.items[0].metadata.name}")
+          kubectl port-forward pod/$BACKEND_POD 3001:9090 -n default &
+          sleep 10
+          curl --fail --connect-timeout 5 --max-time 10 http://localhost:3001/recipes || { echo "Backend test failed"; kubectl logs -l app=receipt-backend -n default; kubectl logs -l app=mongodb -n default; exit 1; }
+          kill %1
+
+          # Port-forward to test frontend
           kubectl port-forward pod/$FRONTEND_POD 3000:22137 -n default &
           sleep 20
           curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000 || { echo "Frontend test failed"; kubectl logs $FRONTEND_POD -n default; exit 1; }
           curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000/recipes || { echo "Frontend-backend integration test failed"; kubectl logs $FRONTEND_POD -n default; kubectl describe svc receipt-backend-service -n default; kubectl logs -l app=receipt-backend -n default; kubectl logs -l app=mongodb -n default; exit 1; }
-          kill %1
+          kill %2
 
       - name: Switch traffic to inactive environment
         run: |
