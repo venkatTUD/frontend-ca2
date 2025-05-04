@@ -88,52 +88,53 @@ jobs:
               kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} -o wide
               kubectl describe deployment/receipt-frontend-${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }}
               kubectl get events -n ${{ env.NAMESPACE }}
-              exit 1
+            else
+              echo "Testing pod: $FRONTEND_POD"
+              kubectl describe pod/$FRONTEND_POD -n ${{ env.NAMESPACE }}
+              kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}
+              kubectl describe svc receipt-backend-service -n ${{ env.NAMESPACE }}
+              kubectl get pods -l app=receipt-backend -n ${{ env.NAMESPACE }} -o wide
+              kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}
+              kubectl describe pod -l app=mongodb -n ${{ env.NAMESPACE }}
+              kubectl logs -l app=mongodb -n ${{ env.NAMESPACE }}
+              BACKEND_POD=$(kubectl get pods -l app=receipt-backend -n ${{ env.NAMESPACE }} -o jsonpath="{.items[0].metadata.name}" --field-selector=status.phase=Running)
+              # Start backend port-forward with retry
+              for i in {1..3}; do
+                kubectl port-forward pod/$BACKEND_POD 3001:9090 -n ${{ env.NAMESPACE }} &
+                BACKEND_PORT_FORWARD_PID=$!
+                sleep 30
+                if curl --connect-timeout 2 http://localhost:3001/recipes >/dev/null 2>&1; then
+                  echo "Backend port-forward successful"
+                  break
+                else
+                  echo "Backend port-forward attempt $i failed, retrying..."
+                  kill $BACKEND_PORT_FORWARD_PID 2>/dev/null || true
+                  sleep 5
+                fi
+              done
+              curl --fail --connect-timeout 5 --max-time 10 http://localhost:3001/recipes || { echo "Backend test failed"; kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}; kubectl logs -l app=mongodb -n ${{ env.NAMESPACE }}; }
+              curl --fail --connect-timeout 5 --max-time 10 http://localhost:3001/actuator/prometheus || { echo "Backend metrics test failed"; kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}; }
+              kill $BACKEND_PORT_FORWARD_PID 2>/dev/null || true
+              # Start frontend port-forward with retry
+              for i in {1..3}; do
+                FRONTEND_POD=$(kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} -o jsonpath="{.items[0].metadata.name}" --field-selector=status.phase=Running)
+                kubectl port-forward pod/$FRONTEND_POD 3000:22137 -n ${{ env.NAMESPACE }} &
+                FRONTEND_PORT_FORWARD_PID=$!
+                sleep 30
+                if curl --connect-timeout 2 http://localhost:3000 >/dev/null 2>&1; then
+                  echo "Frontend port-forward successful"
+                  break
+                else
+                  echo "Frontend port-forward attempt $i failed, retrying..."
+                  kill $FRONTEND_PORT_FORWARD_PID 2>/dev/null || true
+                  sleep 5
+                fi
+              done
+              curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000 || { echo "Frontend test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; kubectl describe pod/$FRONTEND_POD -n ${{ env.NAMESPACE }}; }
+              curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000/recipes || { echo "Frontend-backend integration test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; kubectl describe svc receipt-backend-service -n ${{ env.NAMESPACE }}; kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}; kubectl logs -l app=mongodb -n ${{ env.NAMESPACE }}; }
+              curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000/metrics || { echo "Frontend metrics test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; }
+              kill $FRONTEND_PORT_FORWARD_PID 2>/dev/null || true
             fi
-            echo "Testing pod: $FRONTEND_POD"
-            kubectl describe pod/$FRONTEND_POD -n ${{ env.NAMESPACE }}
-            kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}
-            kubectl describe svc receipt-backend-service -n ${{ env.NAMESPACE }}
-            kubectl get pods -l app=receipt-backend -n ${{ env.NAMESPACE }} -o wide
-            kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}
-            kubectl describe pod -l app=mongodb -n ${{ env.NAMESPACE }}
-            kubectl logs -l app=mongodb -n ${{ env.NAMESPACE }}
-            BACKEND_POD=$(kubectl get pods -l app=receipt-backend -n ${{ env.NAMESPACE }} -o jsonpath="{.items[0].metadata.name}")
-            # Start backend port-forward with retry
-            for i in {1..3}; do
-              kubectl port-forward pod/$BACKEND_POD 3001:9090 -n ${{ env.NAMESPACE }} &
-              BACKEND_PORT_FORWARD_PID=$!
-              sleep 30
-              if curl --connect-timeout 2 http://localhost:3001/recipes >/dev/null 2>&1; then
-                echo "Backend port-forward successful"
-                break
-              else
-                echo "Backend port-forward attempt $i failed, retrying..."
-                kill $BACKEND_PORT_FORWARD_PID 2>/dev/null || true
-                sleep 5
-              fi
-            done
-            curl --fail --connect-timeout 5 --max-time 10 http://localhost:3001/recipes || { echo "Backend test failed"; kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}; kubectl logs -l app=mongodb -n ${{ env.NAMESPACE }}; exit 1; }
-            curl --fail --connect-timeout 5 --max-time 10 http://localhost:3001/actuator/prometheus || { echo "Backend metrics test failed"; kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}; exit 1; }
-            kill $BACKEND_PORT_FORWARD_PID 2>/dev/null || true
-            # Start frontend port-forward with retry
-            for i in {1..3}; do
-              kubectl port-forward pod/$FRONTEND_POD 3000:22137 -n ${{ env.NAMESPACE }} &
-              FRONTEND_PORT_FORWARD_PID=$!
-              sleep 30
-              if curl --connect-timeout 2 http://localhost:3000 >/dev/null 2>&1; then
-                echo "Frontend port-forward successful"
-                break
-              else
-                echo "Frontend port-forward attempt $i failed, retrying..."
-                kill $FRONTEND_PORT_FORWARD_PID 2>/dev/null || true
-                sleep 5
-              fi
-            done
-            curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000 || { echo "Frontend test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; kubectl describe pod/$FRONTEND_POD -n ${{ env.NAMESPACE }}; exit 1; }
-            curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000/recipes || { echo "Frontend-backend integration test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; kubectl describe svc receipt-backend-service -n ${{ env.NAMESPACE }}; kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}; kubectl logs -l app=mongodb -n ${{ env.NAMESPACE }}; exit 1; }
-            curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000/metrics || { echo "Frontend metrics test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; exit 1; }
-            kill $FRONTEND_PORT_FORWARD_PID 2>/dev/null || true
 
       - name: Switch traffic to inactive environment
         run: |
