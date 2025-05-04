@@ -78,8 +78,8 @@ jobs:
           kubectl wait --for=condition=available deployment/receipt-frontend-${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} --timeout=300s || { echo "Deployment not ready"; kubectl describe deployment/receipt-frontend-${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }}; exit 1; }
           kubectl rollout status deployment/receipt-frontend-${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }}
 
-          - name: Test inactive environment
-          run: |
+      - name: Test inactive environment
+        run: |
             echo "Listing pods for inactive environment"
             kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} -o wide
             FRONTEND_POD=$(kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} -o jsonpath="{.items[0].metadata.name}" --field-selector=status.phase=Running)
