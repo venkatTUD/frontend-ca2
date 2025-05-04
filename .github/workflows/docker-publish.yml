@@ -10,6 +10,8 @@ env:
   IMAGE_NAME: receipt-frontend
   DOCKER_REGISTRY: docker.io
   DO_CLUSTER_NAME: receipt-cluster
+  SERVICE_NAME: receipt-frontend-service
+  NAMESPACE: default
 
 jobs:
   deploy-frontend:
@@ -58,7 +60,7 @@ jobs:
       - name: Determine active environment
         id: get-active-env
         run: |
-          ACTIVE_ENV=$(kubectl get svc receipt-frontend-service -n default -o jsonpath='{.spec.selector.env}')
+          ACTIVE_ENV=$(kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -o jsonpath='{.spec.selector.env}')
           if [ "$ACTIVE_ENV" = "blue" ]; then
             echo "INACTIVE_ENV=green" >> $GITHUB_ENV
             echo "ACTIVE_ENV=blue" >> $GITHUB_ENV
@@ -69,56 +71,72 @@ jobs:
 
       - name: Deploy to inactive environment
         run: |
-          # Apply inactive deployment
-          kubectl apply -f kubernetes/deployment-${{ env.INACTIVE_ENV }}.yaml -n default || { echo "Failed to apply deployment-${{ env.INACTIVE_ENV }}.yaml"; exit 1; }
-
-          # Update inactive environment image
-          kubectl set image deployment/receipt-frontend-${{ env.INACTIVE_ENV }} receipt-frontend=venkatakurathitud/${{ env.IMAGE_NAME }}:${{ env.SHORT_SHA }} -n default
-
-          # Scale up inactive environment
-          kubectl scale deployment/receipt-frontend-${{ env.INACTIVE_ENV }} --replicas=1 -n default
-
-          # Wait for rollout
-          kubectl rollout status deployment/receipt-frontend-${{ env.INACTIVE_ENV }} -n default
+          kubectl apply -f kubernetes/deployment-${{ env.INACTIVE_ENV }}.yaml -n ${{ env.NAMESPACE }} || { echo "Failed to apply deployment-${{ env.INACTIVE_ENV }}.yaml"; exit 1; }
+          kubectl set image deployment/receipt-frontend-${{ env.INACTIVE_ENV }} receipt-frontend=venkatakurathitud/${{ env.IMAGE_NAME }}:${{ env.SHORT_SHA }} -n ${{ env.NAMESPACE }}
+          kubectl scale deployment/receipt-frontend-${{ env.INACTIVE_ENV }} --replicas=1 -n ${{ env.NAMESPACE }}
+          echo "Waiting for inactive environment to be ready..."
+          kubectl wait --for=condition=available deployment/receipt-frontend-${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} --timeout=300s || { echo "Deployment not ready"; kubectl describe deployment/receipt-frontend-${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }}; exit 1; }
+          kubectl rollout status deployment/receipt-frontend-${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }}
 
       - name: Test inactive environment
         run: |
-          # Get inactive environment pod name
-          FRONTEND_POD=$(kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n default -o jsonpath="{.items[0].metadata.name}")
-
-          # Debug: Log pod and service details
+          echo "Listing pods for inactive environment"
+          kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} -o wide
+          FRONTEND_POD=$(kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} -o jsonpath="{.items[0].metadata.name}" --field-selector=status.phase=Running)
+          if [ -z "$FRONTEND_POD" ]; then
+            echo "No running pod found for inactive environment"
+            kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} -o wide
+            kubectl describe deployment/receipt-frontend-${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }}
+            kubectl get events -n ${{ env.NAMESPACE }}
+            exit 1
+          fi
           echo "Testing pod: $FRONTEND_POD"
-          kubectl describe pod/$FRONTEND_POD -n default
-          kubectl logs $FRONTEND_POD -n default
-          kubectl describe svc receipt-backend-service -n default
-          kubectl get pods -l app=receipt-backend -n default -o wide
-          kubectl logs -l app=receipt-backend -n default
-          kubectl describe pod -l app=mongodb -n default
-          kubectl logs -l app=mongodb -n default
-
-          # Test backend directly
-          BACKEND_POD=$(kubectl get pods -l app=receipt-backend -n default -o jsonpath="{.items[0].metadata.name}")
-          kubectl port-forward pod/$BACKEND_POD 3001:9090 -n default &
+          kubectl describe pod/$FRONTEND_POD -n ${{ env.NAMESPACE }}
+          kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}
+          kubectl describe svc receipt-backend-service -n ${{ env.NAMESPACE }}
+          kubectl get pods -l app=receipt-backend -n ${{ env.NAMESPACE }} -o wide
+          kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}
+          kubectl describe pod -l app=mongodb -n ${{ env.NAMESPACE }}
+          kubectl logs -l app=mongodb -n ${{ env.NAMESPACE }}
+          BACKEND_POD=$(kubectl get pods -l app=receipt-backend -n ${{ env.NAMESPACE }} -o jsonpath="{.items[0].metadata.name}")
+          kubectl port-forward pod/$BACKEND_POD 3001:9090 -n ${{ env.NAMESPACE }} &
           sleep 10
-          curl --fail --connect-timeout 5 --max-time 10 http://localhost:3001/recipes || { echo "Backend test failed"; kubectl logs -l app=receipt-backend -n default; kubectl logs -l app=mongodb -n default; exit 1; }
+          curl --fail --connect-timeout 5 --max-time 10 http://localhost:3001/recipes || { echo "Backend test failed"; kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}; kubectl logs -l app=mongodb -n ${{ env.NAMESPACE }}; exit 1; }
+          curl --fail --connect-timeout 5 --max-time 10 http://localhost:3001/actuator/prometheus || { echo "Backend metrics test failed"; kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}; exit 1; }
           kill %1
-
-          # Port-forward to test frontend
-          kubectl port-forward pod/$FRONTEND_POD 3000:22137 -n default &
+          kubectl port-forward pod/$FRONTEND_POD 3000:22137 -n ${{ env.NAMESPACE }} &
           sleep 20
-          curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000 || { echo "Frontend test failed"; kubectl logs $FRONTEND_POD -n default; exit 1; }
-          curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000/recipes || { echo "Frontend-backend integration test failed"; kubectl logs $FRONTEND_POD -n default; kubectl describe svc receipt-backend-service -n default; kubectl logs -l app=receipt-backend -n default; kubectl logs -l app=mongodb -n default; exit 1; }
+          curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000 || { echo "Frontend test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; kubectl describe pod/$FRONTEND_POD -n ${{ env.NAMESPACE }}; exit 1; }
+          curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000/recipes || { echo "Frontend-backend integration test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; kubectl describe svc receipt-backend-service -n ${{ env.NAMESPACE }}; kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}; kubectl logs -l app=mongodb -n ${{ env.NAMESPACE }}; exit 1; }
+          curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000/metrics || { echo "Frontend metrics test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; exit 1; }
           kill %2
 
       - name: Switch traffic to inactive environment
         run: |
-          # Update service selector to inactive environment
-          kubectl patch svc receipt-frontend-service -n default -p "{\"spec\":{\"selector\":{\"app\":\"receipt-frontend\",\"env\":\"${{ env.INACTIVE_ENV }}\"}}}"
-
-          # Scale down active environment
-          kubectl scale deployment/receipt-frontend-${{ env.ACTIVE_ENV }} --replicas=0 -n default
+          kubectl patch svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -p "{\"spec\":{\"selector\":{\"app\":\"receipt-frontend\",\"env\":\"${{ env.INACTIVE_ENV }}\"}}}"
+          kubectl patch hpa receipt-frontend -n ${{ env.NAMESPACE }} -p "{\"spec\":{\"scaleTargetRef\":{\"name\":\"receipt-frontend-${{ env.INACTIVE_ENV }}\"}}}" || echo "HPA not found, skipping update"
+          kubectl scale deployment/receipt-frontend-${{ env.ACTIVE_ENV }} --replicas=0 -n ${{ env.NAMESPACE }}
 
       - name: Verify deployment
         run: |
-          kubectl get pods -l app=receipt-frontend -n default -o wide
-          kubectl get svc receipt-frontend-service -n default -o wide
+          PUBLIC_IP=$(doctl compute droplet list --format PublicIPv4 --no-header --name default-pool-69s2p | head -n 1)
+          NODE_PORT=$(kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -o jsonpath='{.spec.ports[0].nodePort}')
+          FRONTEND_URL="http://${PUBLIC_IP}:${NODE_PORT}"
+          BACKEND_POD=$(kubectl get pods -l app=receipt-backend -n ${{ env.NAMESPACE }} -o jsonpath="{.items[0].metadata.name}")
+          kubectl port-forward pod/$BACKEND_POD 3001:9090 -n ${{ env.NAMESPACE }} &
+          sleep 10
+          GRAFANA_IP=$(kubectl get svc grafana-loadbalancer -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' || echo "pending")
+          if [ "$GRAFANA_IP" != "pending" ]; then
+            GRAFANA_URL="http://${GRAFANA_IP}"
+          else
+            GRAFANA_URL="pending"
+          fi
+          kubectl get pods -l app=receipt-frontend -n ${{ env.NAMESPACE }} -o wide
+          kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -o wide
+          kubectl get hpa receipt-frontend -n ${{ env.NAMESPACE }} || echo "HPA not configured"
+          curl --fail --connect-timeout 5 --max-time 10 "$FRONTEND_URL" || echo "Warning: Frontend health check failed"
+          curl --fail --connect-timeout 5 --max-time 10 "$FRONTEND_URL/recipes" || echo "Warning: Frontend-backend API health check failed"
+          curl --fail --connect-timeout 5 --max-time 10 "$FRONTEND_URL/metrics" || echo "Warning: Frontend metrics endpoint check failed"
+          curl --fail --connect-timeout 5 --max-time 10 http://localhost:3001/actuator/prometheus || echo "Warning: Backend metrics endpoint check failed"
+          echo "Grafana URL: $GRAFANA_URL"
+          kill %1
