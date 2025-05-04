@@ -3,17 +3,16 @@ const url = require('url');
 const { parse } = require('querystring');
 const fs = require('fs');
 
-// Load configuration from environment variables or config file
+// Load configuration from environment variables
 const config = {
-    // Hardcode to use the Kubernetes service
-    webservice_host: 'receipt-backend-service',
-    webservice_port: '80',
+    webservice_host: process.env.WEBSERVICE_HOST || 'receipt-backend-service.default.svc.cluster.local',
+    webservice_port: process.env.WEBSERVICE_PORT || '80',
     exposedPort: process.env.EXPOSED_PORT || '22137',
     app_name: 'Recipe Tracker'
 };
 global.gConfig = config;
 
-console.log('Using fixed configuration to connect to backend');
+console.log('Using configuration to connect to backend');
 console.log('webservice_host:', config.webservice_host);
 console.log('webservice_port:', config.webservice_port);
 
