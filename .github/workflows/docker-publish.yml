@@ -1,106 +1,106 @@
 name: Frontend Blue-Green Deployment CI/CD
 
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
+     push:
+       branches: [ "main" ]
+     pull_request:
+       branches: [ "main" ]
 env:
-  IMAGE_NAME: receipt-frontend
-  DOCKER_REGISTRY: docker.io
-  DO_CLUSTER_NAME: receipt-cluster
+     IMAGE_NAME: receipt-frontend
+     DOCKER_REGISTRY: docker.io
+     DO_CLUSTER_NAME: receipt-cluster
 
 jobs:
-  deploy-frontend:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+     deploy-frontend:
+       runs-on: ubuntu-latest
+       permissions:
+         contents: read
+         packages: write
+       steps:
+         - name: Checkout code
+           uses: actions/checkout@v4
 
-      - name: Get short SHA
-        id: sha
-        run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+         - name: Get short SHA
+           id: sha
+           run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERID }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+         - name: Login to Docker Hub
+           uses: docker/login-action@v3
+           with:
+             username: ${{ secrets.DOCKERHUB_USERID }}
+             password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+         - name: Set up Docker Buildx
+           uses: docker/setup-buildx-action@v3
 
-      - name: Build and push frontend
-        uses: docker/build-push-action@v6
-        with:
-          context: frontend
-          push: true
-          tags: |
-            venkatakurathitud/${{ env.IMAGE_NAME }}:${{ env.SHORT_SHA }}
-            venkatakurathitud/${{ env.IMAGE_NAME }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+         - name: Build and push frontend
+           uses: docker/build-push-action@v6
+           with:
+             context: .
+             file: Dockerfile
+             push: true
+             tags: |
+               venkatakurathitud/${{ env.IMAGE_NAME }}:${{ env.SHORT_SHA }}
+               venkatakurathitud/${{ env.IMAGE_NAME }}:latest
+             cache-from: type=gha
+             cache-to: type=gha,mode=max
 
-      - name: Install doctl
-        uses: digitalocean/action-doctl@v2
-        with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+         - name: Install doctl
+           uses: digitalocean/action-doctl@v2
+           with:
+             token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
 
-      - name: Configure kubectl
-        run: |
-          doctl kubernetes cluster kubeconfig save ${{ env.DO_CLUSTER_NAME }} || { echo "Failed to configure kubectl"; exit 1; }
+         - name: Configure kubectl
+           run: |
+             doctl kubernetes cluster kubeconfig save ${{ env.DO_CLUSTER_NAME }} || { echo "Failed to configure kubectl"; exit 1; }
 
-      - name: Determine active environment
-        id: get-active-env
-        run: |
-          ACTIVE_ENV=$(kubectl get svc receipt-frontend-service -n default -o jsonpath='{.spec.selector.env}')
-          if [ "$ACTIVE_ENV" = "blue" ]; then
-            echo "INACTIVE_ENV=green" >> $GITHUB_ENV
-            echo "ACTIVE_ENV=blue" >> $GITHUB_ENV
-          else
-            echo "INACTIVE_ENV=blue" >> $GITHUB_ENV
-            echo "ACTIVE_ENV=green" >> $GITHUB_ENV
-          fi
+         - name: Determine active environment
+           id: get-active-env
+           run: |
+             ACTIVE_ENV=$(kubectl get svc receipt-frontend-service -n default -o jsonpath='{.spec.selector.env}')
+             if [ "$ACTIVE_ENV" = "blue" ]; then
+               echo "INACTIVE_ENV=green" >> $GITHUB_ENV
+               echo "ACTIVE_ENV=blue" >> $GITHUB_ENV
+             else
+               echo "INACTIVE_ENV=blue" >> $GITHUB_ENV
+               echo "ACTIVE_ENV=green" >> $GITHUB_ENV
+             fi
 
-      - name: Deploy to inactive environment
-        run: |
-          # Apply inactive deployment
-          kubectl apply -f frontend/kubernetes/deployment-${{ env.INACTIVE_ENV }}.yaml -n default || { echo "Failed to apply deployment-${{ env.INACTIVE_ENV }}.yaml"; exit 1; }
+         - name: Deploy to inactive environment
+           run: |
+             # Apply inactive deployment
+             kubectl apply -f kubernetes/deployment-${{ env.INACTIVE_ENV }}.yaml -n default || { echo "Failed to apply deployment-${{ env.INACTIVE_ENV }}.yaml"; exit 1; }
 
-          # Update inactive environment image
-          kubectl set image deployment/receipt-frontend-${{ env.INACTIVE_ENV }} receipt-frontend=venkatakurathitud/${{ env.IMAGE_NAME }}:${{ env.SHORT_SHA }} -n default
+             # Update inactive environment image
+             kubectl set image deployment/receipt-frontend-${{ env.INACTIVE_ENV }} receipt-frontend=venkatakurathitud/${{ env.IMAGE_NAME }}:${{ env.SHORT_SHA }} -n default
 
-          # Scale up inactive environment
-          kubectl scale deployment/receipt-frontend-${{ env.INACTIVE_ENV }} --replicas=1 -n default
+             # Scale up inactive environment
+             kubectl scale deployment/receipt-frontend-${{ env.INACTIVE_ENV }} --replicas=1 -n default
 
-          # Wait for rollout
-          kubectl rollout status deployment/receipt-frontend-${{ env.INACTIVE_ENV }} -n default
+             # Wait for rollout
+             kubectl rollout status deployment/receipt-frontend-${{ env.INACTIVE_ENV }} -n default
 
-      - name: Test inactive environment
-        run: |
-          # Get inactive environment pod name
-          FRONTEND_POD=$(kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n default -o jsonpath="{.items[0].metadata.name}")
+         - name: Test inactive environment
+           run: |
+             # Get inactive environment pod name
+             FRONTEND_POD=$(kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n default -o jsonpath="{.items[0].metadata.name}")
 
-          # Port-forward to test
-          kubectl port-forward pod/$FRONTEND_POD 3000:22137 -n default &
-          sleep 10
-          curl --fail http://localhost:3000 || { echo "Frontend test failed"; exit 1; }
-          curl --fail http://localhost:3000/api/recipes || { echo "Frontend-backend integration test failed"; exit 1; }
-          kill %1
+             # Port-forward to test
+             kubectl port-forward pod/$FRONTEND_POD 3000:22137 -n default &
+             sleep 10
+             curl --fail http://localhost:3000 || { echo "Frontend test failed"; exit 1; }
+             curl --fail http://localhost:3000/api/recipes || { echo "Frontend-backend integration test failed"; exit 1; }
+             kill %1
 
-      - name: Switch traffic to inactive environment
-        run: |
-          # Update service selector to inactive environment
-          kubectl patch svc receipt-frontend-service -n default -p "{\"spec\":{\"selector\":{\"app\":\"receipt-frontend\",\"env\":\"${{ env.INACTIVE_ENV }}\"}}}"
+         - name: Switch traffic to inactive environment
+           run: |
+             # Update service selector to inactive environment
+             kubectl patch svc receipt-frontend-service -n default -p "{\"spec\":{\"selector\":{\"app\":\"receipt-frontend\",\"env\":\"${{ env.INACTIVE_ENV }}\"}}}"
 
-          # Scale down active environment
-          kubectl scale deployment/receipt-frontend-${{ env.ACTIVE_ENV }} --replicas=0 -n default
+             # Scale down active environment
+             kubectl scale deployment/receipt-frontend-${{ env.ACTIVE_ENV }} --replicas=0 -n default
 
-      - name: Verify deployment
-        run: |
-          kubectl get pods -l app=receipt-frontend -n default -o wide
-          kubectl get svc receipt-frontend-service -n default -o wide
+         - name: Verify deployment
+           run: |
+             kubectl get pods -l app=receipt-frontend -n default -o wide
+             kubectl get svc receipt-frontend-service -n default -o wide
