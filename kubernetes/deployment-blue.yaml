@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+     name: receipt-frontend-blue
+     namespace: default
+spec:
+     replicas: 1
+     selector:
+       matchLabels:
+         app: receipt-frontend
+         env: blue
+     template:
+       metadata:
+         labels:
+           app: receipt-frontend
+           env: blue
+       spec:
+         containers:
+         - name: receipt-frontend
+           image: venkatakurathitud/receipt-frontend:latest
+           ports:
+           - containerPort: 22137
+           env:
+           - name: WEBSERVICE_HOST
+             value: "receipt-backend-service"
+           - name: WEBSERVICE_PORT
+             value: "80"
+           - name: EXPOSED_PORT
+             value: "22137"
+           livenessProbe:
+             httpGet:
+               path: /
+               port: 22137
+             initialDelaySeconds: 5
+             periodSeconds: 5
+           readinessProbe:
+             httpGet:
+               path: /
+               port: 22137
+             initialDelaySeconds: 5
+             periodSeconds: 5
