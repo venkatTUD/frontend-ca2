@@ -3,9 +3,11 @@ kind: Service
 metadata:
   name: receipt-frontend-service
 spec:
-  type: LoadBalancer
-  ports:
-  - port: 80
-    targetPort: 22137
   selector:
     app: receipt-frontend
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 22137
+    nodePort: 30001
+  type: NodePort
