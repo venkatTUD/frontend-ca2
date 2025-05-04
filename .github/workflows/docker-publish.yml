@@ -97,7 +97,7 @@ jobs:
           kubectl port-forward pod/$FRONTEND_POD 3000:22137 -n default &
           sleep 10
           curl --fail http://localhost:3000 || { echo "Frontend test failed"; exit 1; }
-          curl --fail --connect-timeout 5 http://localhost:3000/api/recipes || { echo "Frontend-backend integration test failed"; kubectl logs $FRONTEND_POD -n default; kubectl describe svc receipt-backend-service -n default; exit 1; }
+          curl --fail --connect-timeout 5 http://localhost:3000/recipes || { echo "Frontend-backend integration test failed"; kubectl logs $FRONTEND_POD -n default; kubectl describe svc receipt-backend-service -n default; exit 1; }
           kill %1
 
       - name: Switch traffic to inactive environment
