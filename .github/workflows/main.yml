@@ -9,7 +9,9 @@ on:
 env:
   IMAGE_NAME: receipt-frontend
   DOCKER_REGISTRY: docker.io
-  DO_CLUSTER_NAME: receipt-cluster
+  GCP_PROJECT_ID: your-gcp-project-id  # Replace with your actual GCP project ID
+  GCP_CLUSTER_NAME: receipt-cluster  # Replace with your actual GKE cluster name
+  GCP_ZONE: us-central1  # Replace with your actual GCP zone
   SERVICE_NAME: receipt-frontend-service
   NAMESPACE: default
 
@@ -47,15 +49,35 @@ jobs:
             venkatakurathitud/${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Install doctl
-        uses: digitalocean/action-doctl@v2
+      
+      # ✅ Authenticate to Google Cloud using a service account key
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
         with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+            credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+    
+      # ✅ Set up gcloud CLI
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+            project_id: eadtud
+            install_components: 'gke-gcloud-auth-plugin'
+    
 
+      # 👉 Configure kubectl using gcloud and get GKE kubeconfig
       - name: Configure kubectl
         run: |
-          doctl kubernetes cluster kubeconfig save ${{ env.DO_CLUSTER_NAME }} || { echo "Failed to configure kubectl"; exit 1; }
+          gcloud container clusters get-credentials $GKE_CLUSTER_NAME --region $GKE_REGION
+
+      # - name: Set up GCP Credentials
+      #   uses: google-github-actions/setup-gcloud@v2
+      #   with:
+      #     project_id: ${{ env.GCP_PROJECT_ID }}
+      #     credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}  # Add your GCP service account JSON key as a GitHub secret
+
+      # - name: Authenticate to GKE
+      #   run: |
+      #     gcloud container clusters get-credentials ${{ env.GCP_CLUSTER_NAME }} --zone ${{ env.GCP_ZONE }} --project ${{ env.GCP_PROJECT_ID }}
 
       - name: Determine active environment
         id: get-active-env
@@ -135,38 +157,38 @@ jobs:
                 fi
               done
               curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000 || { echo "Frontend test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; kubectl describe pod/$FRONTEND_POD -n ${{ env.NAMESPACE }}; }
-              curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000/recipes || { echo "Frontend-backend integration test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; kubectl describe svc receipt-backend-service -n ${{ env.NAMESPACE }}; kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}; kubectl logs -l app=mongodb -n ${{ env.NAMESPACE }}; }
-              curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000/metrics || { echo "Frontend metrics test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; }
-              kill $FRONTEND_PORT_FORWARD_PID 2>/dev/null || true
-              break
-            done
-
+              curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000/recipes || { echo "Frontend-backend integration test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; kubectl describe svc receipt-backend-service -n ${{ env.NAMESPACE }}; kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}; kubectl logs -
+                curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000/metrics || { echo "Frontend metrics test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; }
+                kill $FRONTEND_PORT_FORWARD_PID 2>/dev/null || true
+                break
+              done
+  
       - name: Switch traffic to inactive environment
         run: |
-          kubectl patch svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -p "{\"spec\":{\"selector\":{\"app\":\"receipt-frontend\",\"env\":\"${{ env.INACTIVE_ENV }}\"}}}"
-          kubectl patch hpa receipt-frontend -n ${{ env.NAMESPACE }} -p "{\"spec\":{\"scaleTargetRef\":{\"name\":\"receipt-frontend-${{ env.INACTIVE_ENV }}\"}}}" || echo "HPA not found, skipping update"
-          kubectl scale deployment/receipt-frontend-${{ env.ACTIVE_ENV }} --replicas=0 -n ${{ env.NAMESPACE }}
-
+            kubectl patch svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -p "{\"spec\":{\"selector\":{\"app\":\"receipt-frontend\",\"env\":\"${{ env.INACTIVE_ENV }}\"}}}"
+            kubectl patch hpa receipt-frontend -n ${{ env.NAMESPACE }} -p "{\"spec\":{\"scaleTargetRef\":{\"name\":\"receipt-frontend-${{ env.INACTIVE_ENV }}\"}}}" || echo "HPA not found, skipping update"
+            kubectl scale deployment/receipt-frontend-${{ env.ACTIVE_ENV }} --replicas=0 -n ${{ env.NAMESPACE }}
+  
       - name: Verify deployment
         run: |
-          PUBLIC_IP=$(doctl compute droplet list --format PublicIPv4 --no-header --name default-pool-69s2p | head -n 1)
-          NODE_PORT=$(kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -o jsonpath='{.spec.ports[0].nodePort}')
-          FRONTEND_URL="http://${PUBLIC_IP}:${NODE_PORT}"
-          BACKEND_POD=$(kubectl get pods -l app=receipt-backend -n ${{ env.NAMESPACE }} -o jsonpath="{.items[0].metadata.name}")
-          kubectl port-forward pod/$BACKEND_POD 3001:9090 -n ${{ env.NAMESPACE }} &
-          sleep 10
-          GRAFANA_IP=$(kubectl get svc grafana-loadbalancer -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' || echo "pending")
-          if [ "$GRAFANA_IP" != "pending" ]; then
-            GRAFANA_URL="http://${GRAFANA_IP}"
-          else
-            GRAFANA_URL="pending"
-          fi
-          kubectl get pods -l app=receipt-frontend -n ${{ env.NAMESPACE }} -o wide
-          kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -o wide
-          kubectl get hpa receipt-frontend -n ${{ env.NAMESPACE }} || echo "HPA not configured"
-          curl --fail --connect-timeout 5 --max-time 10 "$FRONTEND_URL" || echo "Warning: Frontend health check failed"
-          curl --fail --connect-timeout 5 --max-time 10 "$FRONTEND_URL/recipes" || echo "Warning: Frontend-backend API health check failed"
-          curl --fail --connect-timeout 5 --max-time 10 "$FRONTEND_URL/metrics" || echo "Warning: Frontend metrics endpoint check failed"
-          curl --fail --connect-timeout 5 --max-time 10 http://localhost:3001/actuator/prometheus || echo "Warning: Backend metrics endpoint check failed"
-          echo "Grafana URL: $GRAFANA_URL"
-          kill %1
+            PUBLIC_IP=$(doctl compute droplet list --format PublicIPv4 --no-header --name default-pool-69s2p | head -n 1)
+            NODE_PORT=$(kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -o jsonpath='{.spec.ports[0].nodePort}')
+            FRONTEND_URL="http://${PUBLIC_IP}:${NODE_PORT}"
+            BACKEND_POD=$(kubectl get pods -l app=receipt-backend -n ${{ env.NAMESPACE }} -o jsonpath="{.items[0].metadata.name}")
+            kubectl port-forward pod/$BACKEND_POD 3001:9090 -n ${{ env.NAMESPACE }} &
+            sleep 10
+            GRAFANA_IP=$(kubectl get svc grafana-loadbalancer -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' || echo "pending")
+            if [ "$GRAFANA_IP" != "pending" ]; then
+              GRAFANA_URL="http://${GRAFANA_IP}"
+            else
+              GRAFANA_URL="pending"
+            fi
+            kubectl get pods -l app=receipt-frontend -n ${{ env.NAMESPACE }} -o wide
+            kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -o wide
+            kubectl get hpa receipt-frontend -n ${{ env.NAMESPACE }} || echo "HPA not configured"
+            curl --fail --connect-timeout 5 --max-time 10 "$FRONTEND_URL" || echo "Warning: Frontend health check failed"
+            curl --fail --connect-timeout 5 --max-time 10 "$FRONTEND_URL/recipes" || echo "Warning: Frontend-backend API health check failed"
+            curl --fail --connect-timeout 5 --max-time 10 "$FRONTEND_URL/metrics" || echo "Warning: Frontend metrics endpoint check failed"
+            curl --fail --connect-timeout 5 --max-time 10 http://localhost:3001/actuator/prometheus || echo "Warning: Backend metrics endpoint check failed"
+            echo "Grafana URL: $GRAFANA_URL"
+            kill %1  
