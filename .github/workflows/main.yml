@@ -167,7 +167,7 @@ jobs:
               fi
             done
             curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000 || { echo "Frontend test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; kubectl describe pod/$FRONTEND_POD -n ${{ env.NAMESPACE }}; }
-            curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000/recipes || { echo "Frontend-backend integration test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; kubectl describe svc receipt-backend-service -n ${{ env.NAMESPACE }}; kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}; kubectl logs -
+            curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000/recipes || { echo "Frontend-backend integration test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; kubectl describe svc receipt-backend-service -n ${{ env.NAMESPACE }}; kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}; kubectl logs -l app=mongodb -n ${{ env.NAMESPACE }}; }
             curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000/metrics || { echo "Frontend metrics test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; }
             kill $FRONTEND_PORT_FORWARD_PID 2>/dev/null || true
             break
