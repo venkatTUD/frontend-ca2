@@ -14,6 +14,10 @@ spec:
       labels:
         app: receipt-frontend
         env: green
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"         # Or /actuator/prometheus if using Spring Boot
+        prometheus.io/port: "80"
     spec:
       containers:
       - name: receipt-frontend
