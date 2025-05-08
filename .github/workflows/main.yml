@@ -200,7 +200,7 @@ jobs:
             GRAFANA_URL="pending"
           fi
           # Frontend health checks
-          FRONTEND_URL="http://${EXTERNAL_IP}
+          FRONTEND_URL="http://${EXTERNAL_IP}"
           curl --fail --connect-timeout 5 --max-time 10 "$FRONTEND_URL" || echo "Warning: Frontend health check failed"
           curl --fail --connect-timeout 5 --max-time 10 "$FRONTEND_URL/recipes" || echo "Warning: Frontend-backend API health check failed"
           curl --fail --connect-timeout 5 --max-time 10 "$FRONTEND_URL/metrics" || echo "Warning: Frontend metrics endpoint check failed"
