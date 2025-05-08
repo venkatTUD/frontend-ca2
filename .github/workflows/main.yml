@@ -82,13 +82,13 @@ jobs:
           fi
           
           # Set INACTIVE_ENV based on the ACTIVE_ENV
-          if [ "$ACTIVE_ENV" = "blue" ]; then
-            echo "INACTIVE_ENV=green" >> $GITHUB_ENV
-            echo "ACTIVE_ENV=blue" >> $GITHUB_ENV
-          else
-            echo "INACTIVE_ENV=blue" >> $GITHUB_ENV
-            echo "ACTIVE_ENV=green" >> $GITHUB_ENV
-          fi
+          echo "ACTIVE_ENV=$ACTIVE_ENV" >> $GITHUB_ENV
+            if [ "$ACTIVE_ENV" = "blue" ]; then
+              echo "INACTIVE_ENV=green" >> $GITHUB_ENV
+            else
+              echo "INACTIVE_ENV=blue" >> $GITHUB_ENV
+            fi
+
 
       - name: Deploy to inactive environment
         run: |
@@ -202,3 +202,11 @@ jobs:
           curl --fail --connect-timeout 5 --max-time 10 http://localhost:3001/actuator/prometheus || echo "Warning: Backend metrics endpoint check failed"
           echo "Grafana URL: $GRAFANA_URL"
           kill %1
+
+      - name: Ensure only one frontend replica is running
+        run: |
+            if [ "${{ env.INACTIVE_ENV }}" = "blue" ]; then
+              kubectl scale deployment/receipt-frontend-green --replicas=0 -n ${{ env.NAMESPACE }}
+            else
+              kubectl scale deployment/receipt-frontend-blue --replicas=0 -n ${{ env.NAMESPACE }}
+            fi
