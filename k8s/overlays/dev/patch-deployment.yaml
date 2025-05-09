@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: receipt-frontend-blue
+spec:
+  template:
+    spec:
+      containers:
+      - name: receipt-frontend
+        env:
+        - name: WEBSERVICE_HOST
+          value: receipt-backend-service.dev.svc.cluster.local
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: receipt-frontend-green
+spec:
+  template:
+    spec:
+      containers:
+      - name: receipt-frontend
+        env:
+        - name: WEBSERVICE_HOST
+          value: receipt-backend-service.dev.svc.cluster.local

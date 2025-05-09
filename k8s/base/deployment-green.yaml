@@ -1,37 +1,37 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: receipt-frontend-blue
+  name: receipt-frontend-green
 spec:
-  replicas: 0
+  replicas: 1
   selector:
     matchLabels:
       app: receipt-frontend
-      env: blue
+      env: green
   template:
     metadata:
       labels:
         app: receipt-frontend
-        env: blue
+        env: green
       annotations:
         prometheus.io/scrape: "true"
-        prometheus.io/path: "/metrics"         # Or /actuator/prometheus if using Spring Boot
+        prometheus.io/path: "/metrics"
         prometheus.io/port: "22137"
     spec:
       containers:
       - name: receipt-frontend
-        image: venkatakurathitud/receipt-frontend:latest
+        image: venkatakurathitud/receipt-frontend:SHORT_SHA
         ports:
         - containerPort: 22137
         env:
         - name: WEBSERVICE_HOST
-          value: "receipt-backend-service.default.svc.cluster.local"
+          value: "receipt-backend-service.$NAMESPACE.svc.cluster.local"
         - name: WEBSERVICE_PORT
           value: "80"
         - name: EXPOSED_PORT
           value: "22137"
         - name: ENV_LABEL
-          value: "blue"
+          value: "green"
         livenessProbe:
           httpGet:
             path: /
