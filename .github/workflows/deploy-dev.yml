@@ -52,21 +52,19 @@ jobs:
       - name: Configure kubectl
         run: |
           gcloud container clusters get-credentials $GKE_CLUSTER_NAME --region $GKE_REGION
-      - name: Determine active environment
-        id: get-active-env
-        run: |
-          if kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} --ignore-not-found; then
-            ACTIVE_ENV=$(kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -o jsonpath='{.spec.selector.env}')
-          else
-            ACTIVE_ENV="blue"
-            echo "First-time deployment. Setting ACTIVE_ENV to blue"
-          fi
-          echo "ACTIVE_ENV=$ACTIVE_ENV" >> $GITHUB_ENV
-          if [ "$ACTIVE_ENV" = "blue" ]; then
-            echo "INACTIVE_ENV=green" >> $GITHUB_ENV
-          else
-            echo "INACTIVE_ENV=blue" >> $GITHUB_ENV
-          fi
+          - name: Determine active environment
+          id: get-active-env
+          run: |
+            ACTIVE_ENV=$(kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -o jsonpath='{.spec.selector.env}' 2>/dev/null || echo "blue")
+            if [ "$ACTIVE_ENV" = "blue" ]; then
+              echo "First-time deployment or blue is active. Setting ACTIVE_ENV to blue"
+              INACTIVE_ENV="green"
+            else
+              echo "Green is active. Setting ACTIVE_ENV to green"
+              INACTIVE_ENV="blue"
+            fi
+            echo "ACTIVE_ENV=$ACTIVE_ENV" >> $GITHUB_ENV
+            echo "INACTIVE_ENV=$INACTIVE_ENV" >> $GITHUB_ENV
       - name: Deploy to inactive environment
         run: |
           cd k8s/overlays/dev
