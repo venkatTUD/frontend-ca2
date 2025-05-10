@@ -1,9 +1,9 @@
 name: Frontend Blue-Green Deployment to Prod
 on:
   push:
-    branches: ["release"]
+    branches: ["main"]
   pull_request:
-    branches: ["release"]
+    branches: ["main"]
 env:
   IMAGE_NAME: receipt-frontend
   DOCKER_REGISTRY: docker.io

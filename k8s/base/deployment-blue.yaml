@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
       - name: receipt-frontend
-        image: venkatakurathitud/receipt-frontend:SHORT_SHA
+        image: venkatakurathitud/receipt-frontend:${SHORT_SHA}
         ports:
         - containerPort: 22137
         env:
