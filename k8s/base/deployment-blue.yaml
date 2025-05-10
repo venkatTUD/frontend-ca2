@@ -3,6 +3,7 @@ kind: Deployment
 metadata:
   name: receipt-frontend-blue
 spec:
+  progressDeadlineSeconds: 600  # 10 minutes max
   replicas: 0  # Scaled down initially
   selector:
     matchLabels:
@@ -24,6 +25,7 @@ spec:
         prometheus.io/path: "/metrics"
         prometheus.io/port: "22137"
     spec:
+      terminationGracePeriodSeconds: 30
       containers:
       - name: receipt-frontend
         image: venkatakurathitud/receipt-frontend:${SHORT_SHA}
@@ -42,8 +44,9 @@ spec:
           httpGet:
             path: /
             port: 22137
-          failureThreshold: 30
+          initialDelaySeconds: 5
           periodSeconds: 5
+          failureThreshold: 30  # 30 attempts = 150s max  
         livenessProbe:
           httpGet:
             path: /

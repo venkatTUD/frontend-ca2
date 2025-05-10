@@ -71,68 +71,100 @@ jobs:
           cd k8s/overlays/prod
           kustomize edit set image venkatakurathitud/receipt-frontend=venkatakurathitud/receipt-frontend:${{ env.SHORT_SHA }}
           kubectl apply -k .
+
+        
+
       - name: Test inactive environment
         run: |
-          echo "Listing pods for inactive environment"
-          kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} -o wide
-          for attempt in {1..3}; do
-            FRONTEND_POD=$(kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} -o jsonpath="{.items[0].metadata.name}" --field-selector=status.phase=Running)
-            if [ -z "$FRONTEND_POD" ]; then
-              echo "No running pod found for inactive environment (attempt $attempt)"
-              kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} -o wide
-              kubectl describe deployment/receipt-frontend-${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }}
-              kubectl get events -n ${{ env.NAMESPACE }}
-              sleep 10
-              continue
+            echo "### Starting deployment verification ###"
+            
+            # 1. Verify deployment exists
+            if ! kubectl get deployment/receipt-frontend-${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} --ignore-not-found; then
+              echo "❌ ERROR: Deployment receipt-frontend-${{ env.INACTIVE_ENV }} not found!"
+              echo "### Debugging info ###"
+              kubectl get deployments -n ${{ env.NAMESPACE }}
+              exit 1
             fi
-            echo "Testing pod: $FRONTEND_POD"
-            kubectl describe pod/$FRONTEND_POD -n ${{ env.NAMESPACE }}
-            kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}
-            kubectl describe svc receipt-backend-service -n ${{ env.NAMESPACE }}
-            kubectl get pods -l app=receipt-backend -n ${{ env.NAMESPACE }} -o wide
-            kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}
-            kubectl describe pod -l app=mongodb -n ${{ env.NAMESPACE }}
-            kubectl logs -l app=mongodb -n ${{ env.NAMESPACE }}
-            BACKEND_POD=$(kubectl get pods -l app=receipt-backend -n ${{ env.NAMESPACE }} -o jsonpath="{.items[0].metadata.name}" --field-selector=status.phase=Running)
-            for i in {1..3}; do
-              BACKEND_POD=$(kubectl get pods -l app=receipt-backend -n ${{ env.NAMESPACE }} -o jsonpath="{.items[0].metadata.name}" --field-selector=status.phase=Running)
+        
+            # 2. Wait for deployment to be available (up to 5 minutes)
+            echo "⌛ Waiting for deployment to become available..."
+            kubectl rollout status deployment/receipt-frontend-${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} --timeout=300s || {
+              echo "❌ ERROR: Deployment timed out"
+              echo "### Deployment details ###"
+              kubectl describe deployment/receipt-frontend-${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }}
+              echo "### Pods ###"
+              kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} -o wide
+              echo "### Pod logs ###"
+              kubectl logs -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} --tail=50
+              echo "### Events ###"
+              kubectl get events -n ${{ env.NAMESPACE }} --sort-by=.metadata.creationTimestamp | grep -i "receipt-frontend-${{ env.INACTIVE_ENV }}"
+              exit 1
+            }
+        
+            # 3. Get running pod
+            echo "🔍 Listing pods..."
+            FRONTEND_POD=$(kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} -o jsonpath='{.items[0].metadata.name}' --field-selector=status.phase=Running)
+            if [ -z "$FRONTEND_POD" ]; then
+              echo "❌ ERROR: No running pod found"
+              kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} -o wide
+              exit 1
+            fi
+            echo "✅ Found pod: $FRONTEND_POD"
+        
+            # 4. Verify pod is fully ready
+            echo "🔧 Checking pod readiness..."
+            kubectl wait --for=condition=ready pod/$FRONTEND_POD -n ${{ env.NAMESPACE }} --timeout=120s || {
+              echo "❌ ERROR: Pod failed to become ready"
+              echo "### Pod description ###"
+              kubectl describe pod/$FRONTEND_POD -n ${{ env.NAMESPACE }}
+              echo "### Pod logs ###"
+              kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }} --tail=100
+              exit 1
+            }
+        
+            # 5. Test backend connectivity
+            echo "🔄 Testing backend connection..."
+            BACKEND_POD=$(kubectl get pods -l app=receipt-backend -n ${{ env.NAMESPACE }} -o jsonpath='{.items[0].metadata.name}' --field-selector=status.phase=Running)
+            if [ -n "$BACKEND_POD" ]; then
+              echo "ℹ️ Found backend pod: $BACKEND_POD"
+              
+              # Port-forward in background
               kubectl port-forward pod/$BACKEND_POD 3001:9090 -n ${{ env.NAMESPACE }} &
-              BACKEND_PORT_FORWARD_PID=$!
-              sleep 30
-              if curl --connect-timeout 2 http://localhost:3001/recipes >/dev/null 2>&1; then
-                echo "Backend port-forward successful"
-                break
+              BACKEND_PF_PID=$!
+              sleep 5  # Wait for port-forward to establish
+              
+              if curl --retry 3 --retry-delay 5 --connect-timeout 5 --max-time 10 http://localhost:3001/health; then
+                echo "✅ Backend health check passed"
               else
-                echo "Backend port-forward attempt $i failed, retrying..."
-                kill $BACKEND_PORT_FORWARD_PID 2>/dev/null || true
-                sleep 5
+                echo "❌ ERROR: Backend health check failed"
+                kill $BACKEND_PF_PID 2>/dev/null || true
+                exit 1
               fi
-            done
-            curl --fail --connect-timeout 5 --max-time 10 http://localhost:3001/recipes || { echo "Backend test failed"; kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}; kubectl logs -l app=mongodb -n ${{ env.NAMESPACE }}; }
-            curl --fail --connect-timeout 5 --max-time 10 http://localhost:3001/actuator/prometheus || { echo "Backend metrics test failed"; kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}; }
-            kill $BACKEND_PORT_FORWARD_PID 2>/dev/null || true
-            for i in {1..3}; do
-              FRONTEND_POD=$(kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} -o jsonpath="{.items[0].metadata.name}" --field-selector=status.phase=Running)
-              kubectl port-forward pod/$FRONTEND_POD 3000:22137 -n ${{ env.NAMESPACE }} &
-              FRONTEND_PORT_FORWARD_PID=$!
-              sleep 30
-              if curl --connect-timeout 2 http://localhost:3000 >/dev/null 2>&1; then
-                echo "Frontend port-forward successful"
-                break
-              else
-                echo "Frontend port-forward attempt $i failed, retrying..."
-                kill $FRONTEND_PORT_FORWARD_PID 2>/dev/null || true
-                sleep 5
-              fi
-            done
-            curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000 || { echo "Frontend test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; kubectl describe pod/$FRONTEND_POD -n ${{ env.NAMESPACE }}; }
-            curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000/recipes || { echo "Frontend-backend integration test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; kubectl describe svc receipt-backend-service -n ${{ env.NAMESPACE }}; kubectl logs -l app=receipt-backend -n ${{ env.NAMESPACE }}; kubectl logs -l app=mongodb -n ${{ env.NAMESPACE }}; }
-            curl --fail --connect-timeout 5 --max-time 10 http://localhost:3000/metrics || { echo "Frontend metrics test failed"; kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}; }
-            kill $FRONTEND_PORT_FORWARD_PID 2>/dev/null || true
-            break
-          done
+              kill $BACKEND_PF_PID 2>/dev/null || true
+            else
+              echo "⚠️ No backend pod found, skipping backend tests"
+            fi
+        
+            # 6. Test frontend
+            echo "🚀 Testing frontend..."
+            kubectl port-forward pod/$FRONTEND_POD 3000:22137 -n ${{ env.NAMESPACE }} &
+            FRONTEND_PF_PID=$!
+            sleep 5  # Wait for port-forward
+            
+            if curl --retry 3 --retry-delay 5 --connect-timeout 5 --max-time 10 http://localhost:3000/health; then
+              echo "✅ Frontend health check passed"
+            else
+              echo "❌ ERROR: Frontend health check failed"
+              kill $FRONTEND_PF_PID 2>/dev/null || true
+              exit 1
+            fi
+            
+            kill $FRONTEND_PF_PID 2>/dev/null || true
+            echo "🎉 All tests completed successfully"
+      
       - name: Switch traffic to inactive environment
         run: ./scripts/switch-blue-green.sh ${{ env.NAMESPACE }} ${{ env.INACTIVE_ENV }} ${{ env.ACTIVE_ENV }} ${{ env.SHORT_SHA }}
+      
       - name: Verify deployment
         run: |
           EXTERNAL_IP=$(kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' || echo "pending")
