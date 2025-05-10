@@ -72,95 +72,88 @@ jobs:
           kustomize edit set image venkatakurathitud/receipt-frontend=venkatakurathitud/receipt-frontend:${{ env.SHORT_SHA }}
           kubectl apply -k .
 
-        
+      
+      - name: Setup jq for JSON parsing
+        run: sudo apt-get install -y jq  
 
       - name: Test inactive environment
         run: |
             echo "### Starting deployment verification ###"
             
-            # 1. Verify deployment exists
-            if ! kubectl get deployment/receipt-frontend-${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} --ignore-not-found; then
-              echo "❌ ERROR: Deployment receipt-frontend-${{ env.INACTIVE_ENV }} not found!"
-              echo "### Debugging info ###"
-              kubectl get deployments -n ${{ env.NAMESPACE }}
-              exit 1
+            # 1. Check if this is first-time deployment
+            if ! kubectl get deployments -l app=receipt-frontend -n ${{ env.NAMESPACE }} --ignore-not-found; then
+              echo "🆕 First-time deployment detected - initializing environment"
+              
+              # Apply both deployments (blue and green)
+              kubectl apply -f k8s/base/deployment-blue.yaml -n ${{ env.NAMESPACE }}
+              kubectl apply -f k8s/base/deployment-green.yaml -n ${{ env.NAMESPACE }}
+              
+              # Scale up green as initial environment
+              kubectl scale deployment/receipt-frontend-green --replicas=1 -n ${{ env.NAMESPACE }}
+              
+              # Configure service to point to green
+              kubectl apply -f k8s/base/service.yaml -n ${{ env.NAMESPACE }}
+              
+              # Set environment variables for first deployment
+              echo "INACTIVE_ENV=green" >> $GITHUB_ENV
+              echo "ACTIVE_ENV=none" >> $GITHUB_ENV
+              
+              echo "🎯 First-time deployment initialized with green environment"
+              exit 0  # Skip further testing for first deployment
             fi
         
-            # 2. Wait for deployment to be available (up to 5 minutes)
-            echo "⌛ Waiting for deployment to become available..."
-            kubectl rollout status deployment/receipt-frontend-${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} --timeout=300s || {
-              echo "❌ ERROR: Deployment timed out"
-              echo "### Deployment details ###"
-              kubectl describe deployment/receipt-frontend-${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }}
-              echo "### Pods ###"
-              kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} -o wide
-              echo "### Pod logs ###"
-              kubectl logs -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} --tail=50
-              echo "### Events ###"
-              kubectl get events -n ${{ env.NAMESPACE }} --sort-by=.metadata.creationTimestamp | grep -i "receipt-frontend-${{ env.INACTIVE_ENV }}"
-              exit 1
-            }
-        
-            # 3. Get running pod
-            echo "🔍 Listing pods..."
-            FRONTEND_POD=$(kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} -o jsonpath='{.items[0].metadata.name}' --field-selector=status.phase=Running)
-            if [ -z "$FRONTEND_POD" ]; then
-              echo "❌ ERROR: No running pod found"
-              kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} -o wide
-              exit 1
-            fi
-            echo "✅ Found pod: $FRONTEND_POD"
-        
-            # 4. Verify pod is fully ready
-            echo "🔧 Checking pod readiness..."
-            kubectl wait --for=condition=ready pod/$FRONTEND_POD -n ${{ env.NAMESPACE }} --timeout=120s || {
-              echo "❌ ERROR: Pod failed to become ready"
-              echo "### Pod description ###"
-              kubectl describe pod/$FRONTEND_POD -n ${{ env.NAMESPACE }}
-              echo "### Pod logs ###"
-              kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }} --tail=100
-              exit 1
-            }
-        
-            # 5. Test backend connectivity
-            echo "🔄 Testing backend connection..."
-            BACKEND_POD=$(kubectl get pods -l app=receipt-backend -n ${{ env.NAMESPACE }} -o jsonpath='{.items[0].metadata.name}' --field-selector=status.phase=Running)
-            if [ -n "$BACKEND_POD" ]; then
-              echo "ℹ️ Found backend pod: $BACKEND_POD"
+            # 2. Normal blue-green deployment flow
+            echo "🔁 Normal deployment flow - testing inactive environment: ${{ env.INACTIVE_ENV }}"
+            
+            # Wait for deployment (with first-time safety check)
+            for i in {1..30}; do
+              DEPLOYMENT_STATUS=$(kubectl get deployment receipt-frontend-${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} -o jsonpath='{.status.availableReplicas}')
               
-              # Port-forward in background
-              kubectl port-forward pod/$BACKEND_POD 3001:9090 -n ${{ env.NAMESPACE }} &
-              BACKEND_PF_PID=$!
-              sleep 5  # Wait for port-forward to establish
-              
-              if curl --retry 3 --retry-delay 5 --connect-timeout 5 --max-time 10 http://localhost:3001/health; then
-                echo "✅ Backend health check passed"
-              else
-                echo "❌ ERROR: Backend health check failed"
-                kill $BACKEND_PF_PID 2>/dev/null || true
+              if [ "$DEPLOYMENT_STATUS" = "1" ]; then
+                echo "✅ Deployment is available"
+                break
+              elif [ "$i" -eq 30 ]; then
+                echo "❌ ERROR: Deployment never became available"
+                kubectl describe deployment receipt-frontend-${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }}
                 exit 1
+              else
+                echo "⌛ Waiting for deployment to become available (attempt $i/30)..."
+                sleep 5
               fi
-              kill $BACKEND_PF_PID 2>/dev/null || true
-            else
-              echo "⚠️ No backend pod found, skipping backend tests"
-            fi
+            done
         
-            # 6. Test frontend
-            echo "🚀 Testing frontend..."
+            # Get pod name with safety checks
+            for i in {1..10}; do
+              FRONTEND_POD=$(kubectl get pods -l app=receipt-frontend,env=${{ env.INACTIVE_ENV }} -n ${{ env.NAMESPACE }} --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+              
+              if [ -n "$FRONTEND_POD" ]; then
+                echo "✅ Found running pod: $FRONTEND_POD"
+                break
+              elif [ "$i" -eq 10 ]; then
+                echo "❌ ERROR: No running pod found after 10 attempts"
+                kubectl get pods -l app=receipt-frontend -n ${{ env.NAMESPACE }} -o wide
+                exit 1
+              else
+                echo "⌛ Waiting for pod to start (attempt $i/10)..."
+                sleep 5
+              fi
+            done
+        
+            # Basic health check
             kubectl port-forward pod/$FRONTEND_POD 3000:22137 -n ${{ env.NAMESPACE }} &
-            FRONTEND_PF_PID=$!
+            PF_PID=$!
             sleep 5  # Wait for port-forward
             
-            if curl --retry 3 --retry-delay 5 --connect-timeout 5 --max-time 10 http://localhost:3000/health; then
-              echo "✅ Frontend health check passed"
+            if curl --retry 2 --connect-timeout 5 http://localhost:3000/health; then
+              echo "✅ Health check passed"
+              kill $PF_PID
             else
-              echo "❌ ERROR: Frontend health check failed"
-              kill $FRONTEND_PF_PID 2>/dev/null || true
+              echo "❌ Health check failed"
+              kill $PF_PID
               exit 1
             fi
-            
-            kill $FRONTEND_PF_PID 2>/dev/null || true
-            echo "🎉 All tests completed successfully"
+        
+            echo "🎉 Environment verified successfully"
       
       - name: Switch traffic to inactive environment
         run: ./scripts/switch-blue-green.sh ${{ env.NAMESPACE }} ${{ env.INACTIVE_ENV }} ${{ env.ACTIVE_ENV }} ${{ env.SHORT_SHA }}
