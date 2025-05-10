@@ -7,7 +7,7 @@ on:
 env:
   IMAGE_NAME: receipt-frontend
   DOCKER_REGISTRY: docker.io
-  GKE_CLUSTER_NAME: receipt-cluster
+  GKE_CLUSTER_NAME: receipt-prod-cluster
   GKE_REGION: us-central1
   SERVICE_NAME: receipt-frontend-service
   NAMESPACE: prod
