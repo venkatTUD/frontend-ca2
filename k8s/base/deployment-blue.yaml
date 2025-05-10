@@ -5,6 +5,7 @@ metadata:
 spec:
   progressDeadlineSeconds: 600  # 10 minutes max
   replicas: 0  # Scaled down initially
+  revisionHistoryLimit: 2
   selector:
     matchLabels:
       app: receipt-frontend
