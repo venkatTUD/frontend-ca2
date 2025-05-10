@@ -4,5 +4,4 @@ metadata:
   name: receipt-frontend-service
 spec:
   selector:
-    app: receipt-frontend
-    env: green  # Start with green in prod
+    env: green  # Can be patched to blue during switches

@@ -5,7 +5,7 @@ metadata:
 spec:
   selector:
     app: receipt-frontend
-    env: blue  # Default, patched by overlays
+    env: green  # Default to green for first deployment
   ports:
     - port: 80
       targetPort: 22137

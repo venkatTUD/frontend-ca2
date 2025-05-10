@@ -6,4 +6,4 @@ resources:
   - service.yaml
 images:
   - name: venkatakurathitud/receipt-frontend
-    newTag: SHORT_SHA
+    newTag: SHORT_SHA  # Will be replaced in workflow

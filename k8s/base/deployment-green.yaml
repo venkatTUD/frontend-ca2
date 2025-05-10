@@ -3,11 +3,17 @@ kind: Deployment
 metadata:
   name: receipt-frontend-green
 spec:
-  replicas: 1
+  replicas: 0  # Will be scaled to 1 on first deploy
   selector:
     matchLabels:
       app: receipt-frontend
       env: green
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  minReadySeconds: 30
   template:
     metadata:
       labels:
@@ -25,18 +31,24 @@ spec:
         - containerPort: 22137
         env:
         - name: WEBSERVICE_HOST
-          value: "receipt-backend-service.$NAMESPACE.svc.cluster.local"
+          value: "receipt-backend-service.prod.svc.cluster.local"
         - name: WEBSERVICE_PORT
           value: "80"
         - name: EXPOSED_PORT
           value: "22137"
         - name: ENV_LABEL
           value: "green"
+        startupProbe:
+          httpGet:
+            path: /
+            port: 22137
+          failureThreshold: 30
+          periodSeconds: 5
         livenessProbe:
           httpGet:
             path: /
             port: 22137
-          initialDelaySeconds: 10
+          initialDelaySeconds: 15
           periodSeconds: 5
         readinessProbe:
           httpGet:
@@ -49,5 +61,5 @@ spec:
             cpu: "100m"
             memory: "128Mi"
           limits:
-            cpu: "200m"
-            memory: "256Mi"
+            cpu: "500m"
+            memory: "512Mi"
