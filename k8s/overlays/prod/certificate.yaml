@@ -8,9 +8,9 @@ spec:
   issuerRef:
     name: letsencrypt-prod
     kind: ClusterIssuer
-  commonName: 34.133.70.238.nip.io
+  commonName: 34.171.160.35.nip.io
   dnsNames:
-    - 34.133.70.238.nip.io
+    - 34.171.160.35.nip.io
   # secretTemplate:
   #   annotations:
   #     cert-manager.io/alt-names: "true"

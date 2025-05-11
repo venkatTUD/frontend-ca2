@@ -15,7 +15,7 @@ spec:
         mode: SIMPLE
         credentialName: receipt-frontend-credential
       hosts:
-        - "34.133.70.238.nip.io"
+        - "34.171.160.35.nip.io"
 ---
 apiVersion: networking.istio.io/v1beta1
 kind: VirtualService
@@ -24,7 +24,7 @@ metadata:
   namespace: prod
 spec:
   hosts:
-    - "34.133.70.238.nip.io"
+    - "34.171.160.35.nip.io"
   gateways:
     - receipt-frontend-gateway
   http:
