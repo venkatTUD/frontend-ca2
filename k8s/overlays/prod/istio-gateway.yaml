@@ -2,7 +2,7 @@ apiVersion: networking.istio.io/v1beta1
 kind: Gateway
 metadata:
   name: receipt-frontend-gateway
-  namespace: prod
+  namespace: istio-system
 spec:
   selector:
     istio: ingressgateway
@@ -14,6 +14,7 @@ spec:
       tls:
         mode: SIMPLE
         credentialName: receipt-frontend-credential
+        minProtocolVersion: TLSV1_2
       hosts:
         - "34.171.160.35.nip.io"
 ---
