@@ -3,7 +3,8 @@ on:
   push:
     branches: ["release/*"]
   pull_request:
-    branches: ["release/*"]
+    branches: ["release/**","feature/k8simprovements"]
+
 env:
   IMAGE_NAME: receipt-frontend
   DOCKER_REGISTRY: docker.io
