@@ -3,5 +3,4 @@ kind: Kustomization
 namespace: prod
 resources:
   - ../../base
-patchesStrategicMerge:
-  - patch-service.yaml
+# Remove patch-service.yaml

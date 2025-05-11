@@ -16,6 +16,21 @@ kubectl -n $NAMESPACE get deployment receipt-frontend-$NEW_ENV || { echo "ERROR:
 kubectl -n $NAMESPACE get deployment receipt-frontend-$OLD_ENV || { echo "ERROR: Deployment receipt-frontend-$OLD_ENV not found!"; exit 1; }
 echo "Deployments found."
 
+# Ensure new environment is scaled up
+echo "Ensuring deployment/receipt-frontend-$NEW_ENV is scaled up..."
+kubectl scale deployment/receipt-frontend-$NEW_ENV --replicas=1 -n $NAMESPACE || {
+  echo "ERROR: Failed to scale up deployment receipt-frontend-$NEW_ENV!"
+  exit 1
+}
+
+# Wait for new environment pod to be ready
+echo "Waiting for pod to be ready for env=$NEW_ENV..."
+kubectl wait --for=condition=ready pod -l app=receipt-frontend,env=$NEW_ENV -n $NAMESPACE --timeout=300s || {
+  echo "ERROR: No ready pods found for env=$NEW_ENV!"
+  kubectl get pods -l app=receipt-frontend,env=$NEW_ENV -n $NAMESPACE -o wide
+  exit 1
+}
+
 # Switch service selector
 echo "Patching service receipt-frontend-service selector to env: $NEW_ENV"
 kubectl -n $NAMESPACE patch service receipt-frontend-service -p "{\"spec\":{\"selector\":{\"app\":\"receipt-frontend\",\"env\":\"$NEW_ENV\"}}}" || {
