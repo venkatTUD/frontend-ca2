@@ -4,6 +4,7 @@ resources:
   - deployment-blue.yaml
   - deployment-green.yaml
   - service.yaml
+  - hpa.yaml
 # images:
 #   - name: venkatakurathitud/receipt-frontend
 #     newTag: SHORT_SHA  # Will be replaced in workflow

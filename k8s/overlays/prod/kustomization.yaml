@@ -5,7 +5,6 @@ namespace: prod
 resources:
   - ../../base
   - istio-gateway.yaml
-  - hpa.yaml
 patches:
   - path: patch-deployment.yaml
   - path: patch-service.yaml
