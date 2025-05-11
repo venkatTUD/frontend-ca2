@@ -1,0 +1,19 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: receipt-frontend-cert
+  namespace: dev
+spec:
+  secretName: receipt-frontend-credential
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  commonName: 34.68.31.68.nip.io
+  dnsNames:
+    - 34.68.31.68.nip.io
+  # secretTemplate:
+  #   annotations:
+  #     cert-manager.io/alt-names: "true"
+
+
+      

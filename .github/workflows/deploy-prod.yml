@@ -1,4 +1,4 @@
-name: Frontend Blue-Green Deployment to dev
+name: Frontend Blue-Green Deployment to Prod
 on:
   push:
     branches: ["release/*"]

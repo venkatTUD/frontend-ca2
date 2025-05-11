@@ -1,0 +1,38 @@
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: receipt-frontend-gateway
+  namespace: dev
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      tls:
+        mode: SIMPLE
+        credentialName: receipt-frontend-credential-dev
+      hosts:
+        - "34.68.31.68.nip.io"
+---        
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: receipt-frontend-vs
+  namespace: dev
+spec:
+  gateways:
+    - receipt-frontend-gateway
+  hosts:
+    - "34.68.31.68.nip.io"
+  http:
+    - match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            host: receipt-frontend-service.dev.svc.cluster.local
+            port:
+              number: 80
