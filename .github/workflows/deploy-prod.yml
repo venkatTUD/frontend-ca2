@@ -264,3 +264,11 @@ jobs:
           curl --fail --retry 20 --retry-delay 15 --connect-timeout 15 --max-time 30 "$FRONTEND_URL/recipes" || { echo "Warning: Frontend-backend API health check failed"; }
           curl --fail --retry 20 --retry-delay 15 --connect-timeout 15 --max-time 30 "$FRONTEND_URL/metrics" || { echo "Warning: Frontend metrics endpoint check failed"; }
           echo "External verification complete."
+
+      - name: Verify Deployment via Istio Gateway
+        run: |
+            FRONTEND_URL="https://<INGRESS_IP>.nip.io"
+            echo "Performing health checks on $FRONTEND_URL..."
+            curl --fail "$FRONTEND_URL" || echo "Warning: root check failed"
+            curl --fail "$FRONTEND_URL/recipes" || echo "Warning: API check failed"
+            curl --fail "$FRONTEND_URL/metrics" || echo "Warning: metrics check failed"
