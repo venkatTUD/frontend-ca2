@@ -11,6 +11,9 @@ spec:
   commonName: 34.133.70.238.nip.io
   dnsNames:
     - 34.133.70.238.nip.io
-  secretTemplate:
-    annotations:
-      cert-manager.io/alt-names: "true"
+  # secretTemplate:
+  #   annotations:
+  #     cert-manager.io/alt-names: "true"
+
+
+      

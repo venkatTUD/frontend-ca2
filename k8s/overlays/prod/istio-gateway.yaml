@@ -28,7 +28,10 @@ spec:
   gateways:
     - receipt-frontend-gateway
   http:
-    - route:
+    - match:
+        - uri:
+            prefix: /
+      route:
         - destination:
             host: receipt-frontend-service.prod.svc.cluster.local
             port:

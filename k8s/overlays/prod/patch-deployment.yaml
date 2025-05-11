@@ -3,7 +3,15 @@ kind: Deployment
 metadata:
   name: receipt-frontend-blue
 spec:
+  selector:
+    matchLabels:
+      app: receipt-frontend
+      env: blue
   template:
+    metadata:
+      labels:
+        app: receipt-frontend
+        env: blue
     spec:
       containers:
       - name: receipt-frontend
@@ -16,7 +24,15 @@ kind: Deployment
 metadata:
   name: receipt-frontend-green
 spec:
+  selector:
+    matchLabels:
+      app: receipt-frontend
+      env: green
   template:
+    metadata:
+      labels:
+        app: receipt-frontend
+        env: green
     spec:
       containers:
       - name: receipt-frontend
