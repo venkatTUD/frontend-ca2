@@ -2,7 +2,7 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: receipt-frontend-cert
-  namespace: prod
+  namespace: istio-system
 spec:
   secretName: receipt-frontend-credential
   issuerRef:
@@ -11,9 +11,5 @@ spec:
   commonName: 34.171.160.35.nip.io
   dnsNames:
     - 34.171.160.35.nip.io
-  # secretTemplate:
-  #   annotations:
-  #     cert-manager.io/alt-names: "true"
-
 
       
