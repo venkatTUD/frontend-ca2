@@ -34,7 +34,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Only build and push if it's a push to main, not a pull request
       - name: Build and push frontend
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v6
@@ -46,20 +45,16 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # For pull requests, we might only need to build or push to a staging registry
-      # or skip push entirely depending on your PR workflow.
-      # Adding a placeholder for PR build if needed, otherwise the step is skipped by the 'if' condition above.
       - name: Build frontend (for PRs)
         if: github.event_name == 'pull_request'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
-          push: false # Do not push for PRs
-          tags: venkatakurathitud/${{ env.IMAGE_NAME }}:${{ env.SHORT_SHA }} # Tag still useful for local testing/identification
+          push: false
+          tags: venkatakurathitud/${{ env.IMAGE_NAME }}:${{ env.SHORT_SHA }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v1
@@ -76,7 +71,6 @@ jobs:
         run: |
           gcloud container clusters get-credentials $GKE_CLUSTER_NAME --region $GKE_REGION
 
-      # --- Step for initial setup ---
       - name: Initial Deployment Setup
         id: initial-setup
         run: |
@@ -84,19 +78,14 @@ jobs:
           if ! kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} --ignore-not-found; then
             echo "Frontend service not found. Performing initial deployment setup."
 
-            # Apply base deployments (scaled down initially)
-            echo "Applying base deployments (blue and green)..."
-            kubectl apply -f k8s/base/deployment-blue.yaml -n ${{ env.NAMESPACE }}
-            kubectl apply -f k8s/base/deployment-green.yaml -n ${{ env.NAMESPACE }}
+            # Apply base kustomization (includes deployments and service)
+            echo "Applying base kustomization..."
+            kubectl apply -k k8s/base -n ${{ env.NAMESPACE }}
 
-            # Scale down both deployments initially (redundant if replicas: 0 in base, but safe)
+            # Scale down both deployments initially (redundant but safe)
             echo "Ensuring deployments are scaled down initially..."
-            kubectl scale deployment/receipt-frontend-blue --replicas=0 -n ${{ env.NAMESPACE }} || true # Use || true to avoid failing if deployment not immediately found
-            kubectl scale deployment/receipt-frontend-green --replicas=0 -n ${{ env.NAMESPACE }} || true # Use || true to avoid failing if deployment not immediately found
-
-            # Apply the service, initially pointing to 'green'
-            echo "Applying service manifest..."
-            kubectl apply -f k8s/base/service.yaml -n ${{ env.NAMESPACE }}
+            kubectl scale deployment/receipt-frontend-blue --replicas=0 -n ${{ env.NAMESPACE }} || true
+            kubectl scale deployment/receipt-frontend-green --replicas=0 -n ${{ env.NAMESPACE }} || true
 
             echo "Initial setup complete. Service and deployments created."
             echo "IS_INITIAL_SETUP=true" >> $GITHUB_ENV
@@ -104,28 +93,18 @@ jobs:
             echo "Frontend service found. Skipping initial setup."
             echo "IS_INITIAL_SETUP=false" >> $GITHUB_ENV
           fi
-      # --- End of new step ---
 
       - name: Determine active environment
         id: get-active-env
         run: |
-          # Determine the active environment from the service selector if service exists.
-          # If it's the initial setup, the service was just created pointing to 'green'.
-          # If service or selector not found (fallback), assume 'green' is the current state.
-
-          ACTIVE_ENV="green" # Default assumption for initial or unknown state
+          ACTIVE_ENV="green"
           if kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -o jsonpath='{.spec.selector.env}' &> /dev/null; then
-             SVC_SELECTOR_ENV=$(kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -o jsonpath='{.spec.selector.env}')
-             if [ -n "$SVC_SELECTOR_ENV" ]; then
-               ACTIVE_ENV="$SVC_SELECTOR_ENV"
-               echo "Detected active environment from service selector: $ACTIVE_ENV"
-             else
-               echo "Service selector found but empty. Using default active environment: $ACTIVE_ENV"
-             fi
-          else
-             echo "Could not get service selector. Using default active environment: $ACTIVE_ENV"
+            SVC_SELECTOR_ENV=$(kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -o jsonpath='{.spec.selector.env}')
+            if [ -n "$SVC_SELECTOR_ENV" ]; then
+              ACTIVE_ENV="$SVC_SELECTOR_ENV"
+              echo "Detected active environment: $ACTIVE_ENV"
+            fi
           fi
-
           if [ "$ACTIVE_ENV" = "blue" ]; then
             echo "INACTIVE_ENV=green" >> $GITHUB_ENV
             echo "ACTIVE_ENV=blue" >> $GITHUB_ENV
@@ -133,174 +112,136 @@ jobs:
             echo "INACTIVE_ENV=blue" >> $GITHUB_ENV
             echo "ACTIVE_ENV=green" >> $GITHUB_ENV
           fi
-          echo "INACTIVE_ENV=${{ env.INACTIVE_ENV }}"
-          echo "ACTIVE_ENV=${{ env.ACTIVE_ENV }}"
-
 
       - name: Deploy to inactive environment (Subsequent Runs)
-        # This step only runs if it's NOT the initial setup.
-        # During initial setup, base manifests are applied by 'Initial Deployment Setup'.
         if: env.IS_INITIAL_SETUP == 'false'
         run: |
           echo "Deploying to inactive environment: ${{ env.INACTIVE_ENV }}"
           cd k8s/overlays/prod
-
-          echo "Setting image tag in kustomization.yaml to ${{ env.SHORT_SHA }}..."
           kustomize edit set image venkatakurathitud/receipt-frontend=venkatakurathitud/receipt-frontend:${{ env.SHORT_SHA }}
-          echo "Image tag set."
-
-          echo "Applying kustomized configuration for ${{ env.INACTIVE_ENV }}..."
-          # Apply the kustomized configuration. This updates the deployment definition.
-          # The scaling up happens in the next step.
           kubectl apply -k .
-          echo "Deployment manifest updated and applied for ${{ env.INACTIVE_ENV }}."
+          echo "Deployment manifest updated for ${{ env.INACTIVE_ENV }}."
 
       - name: Setup jq for JSON parsing
         run: sudo apt-get install -y jq
 
       - name: Test and Scale Up Environment
         run: |
-            echo "### Starting environment verification and scale up ###"
+          echo "### Starting environment verification and scale up ###"
+          TARGET_ENV=""
+          if [ "${{ env.IS_INITIAL_SETUP }}" = "true" ]; then
+            TARGET_ENV="green"
+            echo "🆕 Initial setup - targeting green deployment."
+          else
+            TARGET_ENV="${{ env.INACTIVE_ENV }}"
+            echo "🔁 Normal deployment - targeting inactive environment (${{ env.INACTIVE_ENV }})."
+          fi
 
-            TARGET_ENV=""
-            if [ "${{ env.IS_INITIAL_SETUP }}" = "true" ]; then
-              TARGET_ENV="green"
-              echo "🆕 Initial setup detected - targeting green deployment for scale up and test."
-            else
-              TARGET_ENV="${{ env.INACTIVE_ENV }}"
-              echo "🔁 Normal deployment flow - targeting inactive environment (${{ env.INACTIVE_ENV }}) for scale up and test."
-            fi
+          # Scale up the target environment
+          echo "Scaling up deployment/receipt-frontend-$TARGET_ENV to 1 replica."
+          kubectl scale deployment/receipt-frontend-$TARGET_ENV --replicas=1 -n ${{ env.NAMESPACE }}
 
-            # Scale up the target environment
-            echo "Scaling up deployment/receipt-frontend-$TARGET_ENV to 1 replica."
-            kubectl scale deployment/receipt-frontend-$TARGET_ENV --replicas=1 -n ${{ env.NAMESPACE }}
+          # Wait for the target deployment to become available
+          echo "Waiting for deployment/receipt-frontend-$TARGET_ENV to become available..."
+          kubectl wait deployment/receipt-frontend-$TARGET_ENV -n ${{ env.NAMESPACE }} --for condition=available --timeout=300s || {
+            echo "❌ ERROR: Deployment receipt-frontend-$TARGET_ENV failed to become available."
+            kubectl describe deployment receipt-frontend-$TARGET_ENV -n ${{ env.NAMESPACE }}
+            exit 1
+          }
 
-            # Wait for the target deployment to become available
-            echo "Waiting for deployment/receipt-frontend-$TARGET_ENV to become available..."
-            kubectl wait deployment/receipt-frontend-$TARGET_ENV -n ${{ env.NAMESPACE }} --for condition=available --timeout=300s || {
-              echo "❌ ERROR: Deployment receipt-frontend-$TARGET_ENV failed to become available within timeout."
-              kubectl describe deployment receipt-frontend-$TARGET_ENV -n ${{ env.NAMESPACE }}
+          # Wait for pod to be ready
+          echo "Waiting for pod to be ready for env=$TARGET_ENV..."
+          kubectl wait --for=condition=ready pod -l app=receipt-frontend,env=$TARGET_ENV -n ${{ env.NAMESPACE }} --timeout=300s || {
+            echo "❌ ERROR: No ready pods found for env=$TARGET_ENV."
+            kubectl get pods -l app=receipt-frontend,env=$TARGET_ENV -n ${{ env.NAMESPACE }} -o wide
+            exit 1
+          }
+
+          # Wait for service endpoints to be ready
+          echo "Waiting for service ${{ env.SERVICE_NAME }} to have endpoints..."
+          for i in {1..30}; do
+            ENDPOINTS=$(kubectl get endpoints ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -o jsonpath='{.subsets[0].addresses}' 2>/dev/null)
+            if [ -n "$ENDPOINTS" ]; then
+              echo "✅ Service endpoints ready: $ENDPOINTS"
+              break
+            elif [ "$i" -eq 30 ]; then
+              echo "❌ ERROR: Service endpoints not ready after 30 attempts."
+              kubectl describe service ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }}
               exit 1
-            }
-            echo "Deployment $TARGET_ENV is available."
-
-            # Get pod name for health check
-            FRONTEND_POD=""
-            echo "Finding a running pod for deployment/receipt-frontend-$TARGET_ENV..."
-            for i in {1..20}; do
-              FRONTEND_POD=$(kubectl get pods -l app=receipt-frontend,env=$TARGET_ENV -n ${{ env.NAMESPACE }} --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-              if [ -n "$FRONTEND_POD" ]; then
-                echo "✅ Found running pod: $FRONTEND_POD"
-                break
-              elif [ "$i" -eq 20 ]; then
-                echo "❌ ERROR: No running pod found for $TARGET_ENV after 20 attempts"
-                kubectl get pods -l app=receipt-frontend -n ${{ env.NAMESPACE }} -o wide
-                exit 1
-              else
-                echo "⌛ Waiting for pod to start for $TARGET_ENV (attempt $i/20)..."
-                sleep 10
-              fi
-            done
-
-            # Basic health check using port-forward
-            echo "Performing health check on pod $FRONTEND_POD..."
-            LOCAL_PORT=$(python -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()')
-            echo "Using local port $LOCAL_PORT for port-forward."
-
-            # Kill any lingering port-forward processes from previous attempts
-            pkill -f "kubectl port-forward pod/$FRONTEND_POD" || true
-
-            kubectl port-forward pod/$FRONTEND_POD $LOCAL_PORT:22137 -n ${{ env.NAMESPACE }} &
-            PF_PID=$!
-            # Give port-forward a moment to establish, but don't wait too long
-            sleep 5
-
-            # Check if port-forward process is running
-            if ! ps -p $PF_PID > /dev/null; then
-                echo "❌ ERROR: Port-forward process failed to start."
-                exit 1
-            fi
-
-            HEALTH_CHECK_URL="http://localhost:$LOCAL_PORT/health"
-            echo "Attempting health check on $HEALTH_CHECK_URL"
-
-            # Use curl with retries
-            # Increased timeout and retries for robustness
-            if curl --retry 10 --retry-delay 10 --connect-timeout 10 --max-time 20 "$HEALTH_CHECK_URL"; then
-              echo "✅ Health check passed"
-              kill $PF_PID # Kill port-forward process
             else
-              echo "❌ Health check failed"
-              kill $PF_PID # Kill port-forward process
-              exit 1 # Fail the step if health check fails
+              echo "⌛ Waiting for endpoints (attempt $i/30)..."
+              sleep 10
             fi
+          done
 
-            echo "🎉 Environment $TARGET_ENV verified internally successfully"
-
+          # Health check via port-forward
+          echo "Performing health check..."
+          FRONTEND_POD=$(kubectl get pods -l app=receipt-frontend,env=$TARGET_ENV -n ${{ env.NAMESPACE }} --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')
+          LOCAL_PORT=$(python -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()')
+          pkill -f "kubectl port-forward pod/$FRONTEND_POD" || true
+          kubectl port-forward pod/$FRONTEND_POD $LOCAL_PORT:22137 -n ${{ env.NAMESPACE }} &
+          PF_PID=$!
+          sleep 5
+          if ! ps -p $PF_PID > /dev/null; then
+            echo "❌ ERROR: Port-forward failed."
+            exit 1
+          fi
+          HEALTH_CHECK_URL="http://localhost:$LOCAL_PORT/health"
+          if curl --retry 10 --retry-delay 10 --connect-timeout 10 --max-time 20 "$HEALTH_CHECK_URL"; then
+            echo "✅ Health check passed"
+            kill $PF_PID
+          else
+            echo "❌ Health check failed"
+            kill $PF_PID
+            exit 1
+          fi
+          echo "🎉 Environment $TARGET_ENV verified successfully"
 
       - name: Switch traffic to inactive environment (Subsequent Runs)
-        # This step only runs if it's NOT the initial setup.
-        # The initial setup already points the service to green.
         if: env.IS_INITIAL_SETUP == 'false'
         run: |
           echo "Switching traffic from ${{ env.ACTIVE_ENV }} to ${{ env.INACTIVE_ENV }}"
-          # The switch-blue-green.sh script should update the service selector
-          # to point to the ${{ env.INACTIVE_ENV }} deployment.
-          # It should also scale down the old ${{ env.ACTIVE_ENV }} deployment.
           ./scripts/switch-blue-green.sh ${{ env.NAMESPACE }} ${{ env.INACTIVE_ENV }} ${{ env.ACTIVE_ENV }} ${{ env.SHORT_SHA }}
           echo "Traffic switched."
 
       - name: Verify Deployment via External IP
-        # This step runs AFTER the switch for subsequent runs, and after scale up for initial run.
         run: |
           echo "Verifying deployment via external IP."
-
           TARGET_ENV=""
           if [ "${{ env.IS_INITIAL_SETUP }}" = "true" ]; then
-            TARGET_ENV="green" # Initial setup verified green
-            echo "🆕 Initial setup detected - verifying green environment via external IP."
+            TARGET_ENV="green"
+            echo "🆕 Initial setup - verifying green environment."
           else
-            TARGET_ENV="${{ env.INACTIVE_ENV }}" # This is the new active env after switch
-            echo "🔁 Normal deployment flow - verifying newly active environment ($TARGET_ENV) via external IP."
+            TARGET_ENV="${{ env.INACTIVE_ENV }}"
+            echo "🔁 Normal deployment - verifying newly active environment ($TARGET_ENV)."
           fi
 
-          # Wait for service endpoints to be ready for the target environment
-          # This is crucial after a switch to ensure the LoadBalancer updates
+          # Wait for service endpoints to be ready (post-switch)
           echo "Waiting for service ${{ env.SERVICE_NAME }} to have endpoints for env=$TARGET_ENV..."
-          # This waits for at least one pod with the target env label to be ready and associated with the service
-          kubectl wait --for=condition=ready pod -l app=receipt-frontend,env=$TARGET_ENV -n ${{ env.NAMESPACE }} --timeout=300s || {
-              echo "Warning: No ready pods found for service endpoints with env=$TARGET_ENV within timeout. External verification might fail."
-              # Do not exit here, allow external verification attempts
-          }
-          echo "Service endpoints appear ready for env=$TARGET_ENV."
-
+          for i in {1..30}; do
+            ENDPOINTS=$(kubectl get endpoints ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -o jsonpath='{.subsets[0].addresses}' 2>/dev/null)
+            if [ -n "$ENDPOINTS" ]; then
+              echo "✅ Service endpoints ready: $ENDPOINTS"
+              break
+            elif [ "$i" -eq 30 ]; then
+              echo "❌ ERROR: Service endpoints not ready after 30 attempts."
+              kubectl describe service ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }}
+              exit 1
+            else
+              echo "⌛ Waiting for endpoints (attempt $i/30)..."
+              sleep 10
+            fi
+          done
 
           EXTERNAL_IP=$(kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' || echo "pending")
           if [ "$EXTERNAL_IP" = "pending" ]; then
             echo "External IP not available, skipping external verification"
-            exit 0 # Exit gracefully if no external IP
+            exit 0
           fi
 
           FRONTEND_URL="http://${EXTERNAL_IP}"
           echo "Performing external health checks on $FRONTEND_URL..."
-
-          # Add retries to external checks as load balancer updates can take time
-          # Increased retries and delays for robustness
-          echo "Checking $FRONTEND_URL"
           curl --fail --retry 20 --retry-delay 15 --connect-timeout 10 --max-time 30 "$FRONTEND_URL" || { echo "Warning: Frontend root health check failed"; }
-
-          echo "Checking $FRONTEND_URL/recipes"
           curl --fail --retry 20 --retry-delay 15 --connect-timeout 10 --max-time 30 "$FRONTEND_URL/recipes" || { echo "Warning: Frontend-backend API health check failed"; }
-
-          echo "Checking $FRONTEND_URL/metrics"
           curl --fail --retry 20 --retry-delay 15 --connect-timeout 10 --max-time 30 "$FRONTEND_URL/metrics" || { echo "Warning: Frontend metrics endpoint check failed"; }
-
-          # Optional: Add verification that the old deployment is scaled down (for subsequent runs)
-          # if [ "${{ env.IS_INITIAL_SETUP }}" = "false" ]; then
-          #   OLD_DEPLOYMENT_REPLICAS=$(kubectl get deployment receipt-frontend-${{ env.ACTIVE_ENV }} -n ${{ env.NAMESPACE }} -o jsonpath='{.spec.replicas}' || echo "unknown")
-          #   if [ "$OLD_DEPLOYMENT_REPLICAS" != "0" ]; then
-          #     echo "Warning: Old deployment ${{ env.ACTIVE_ENV }} is not scaled down to 0 replicas (currently $OLD_DEPLOYMENT_REPLICAS)."
-          #   fi
-          # fi
-
           echo "External verification complete."
