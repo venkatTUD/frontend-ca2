@@ -2,7 +2,7 @@ apiVersion: networking.istio.io/v1beta1
 kind: Gateway
 metadata:
   name: receipt-frontend-gateway
-  namespace: istio-system
+  namespace: prod
 spec:
   selector:
     istio: ingressgateway
