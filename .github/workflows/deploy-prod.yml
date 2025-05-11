@@ -136,11 +136,11 @@ jobs:
             TARGET_ENV="${{ env.INACTIVE_ENV }}"
             echo "🔁 Normal deployment - targeting inactive environment (${{ env.INACTIVE_ENV }})."
           fi
-
+      
           # Scale up the target environment
           echo "Scaling up deployment/receipt-frontend-$TARGET_ENV to 1 replica."
           kubectl scale deployment/receipt-frontend-$TARGET_ENV --replicas=1 -n ${{ env.NAMESPACE }}
-
+      
           # Wait for the target deployment to become available
           echo "Waiting for deployment/receipt-frontend-$TARGET_ENV to become available..."
           kubectl wait deployment/receipt-frontend-$TARGET_ENV -n ${{ env.NAMESPACE }} --for condition=available --timeout=300s || {
@@ -148,7 +148,7 @@ jobs:
             kubectl describe deployment receipt-frontend-$TARGET_ENV -n ${{ env.NAMESPACE }}
             exit 1
           }
-
+      
           # Wait for pod to be ready
           echo "Waiting for pod to be ready for env=$TARGET_ENV..."
           kubectl wait --for=condition=ready pod -l app=receipt-frontend,env=$TARGET_ENV -n ${{ env.NAMESPACE }} --timeout=300s || {
@@ -156,7 +156,7 @@ jobs:
             kubectl get pods -l app=receipt-frontend,env=$TARGET_ENV -n ${{ env.NAMESPACE }} -o wide
             exit 1
           }
-
+      
           # Wait for service endpoints to be ready
           echo "Waiting for service ${{ env.SERVICE_NAME }} to have endpoints..."
           for i in {1..30}; do
@@ -173,7 +173,7 @@ jobs:
               sleep 10
             fi
           done
-
+      
           # Health check via port-forward
           echo "Performing health check..."
           FRONTEND_POD=$(kubectl get pods -l app=receipt-frontend,env=$TARGET_ENV -n ${{ env.NAMESPACE }} --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')
@@ -186,13 +186,16 @@ jobs:
             echo "❌ ERROR: Port-forward failed."
             exit 1
           fi
-          HEALTH_CHECK_URL="http://localhost:$LOCAL_PORT/health"
+          HEALTH_CHECK_URL="http://localhost:$LOCAL_PORT/"
+          echo "Attempting health check on $HEALTH_CHECK_URL"
           if curl --retry 10 --retry-delay 10 --connect-timeout 10 --max-time 20 "$HEALTH_CHECK_URL"; then
             echo "✅ Health check passed"
             kill $PF_PID
           else
             echo "❌ Health check failed"
             kill $PF_PID
+            kubectl logs $FRONTEND_POD -n ${{ env.NAMESPACE }}
+            kubectl describe pod $FRONTEND_POD -n ${{ env.NAMESPACE }}
             exit 1
           fi
           echo "🎉 Environment $TARGET_ENV verified successfully"
