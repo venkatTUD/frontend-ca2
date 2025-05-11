@@ -6,3 +6,5 @@ spec:
   selector:
     app: receipt-frontend
     env: blue  # Start with blue in dev
+    spec:
+  type: LoadBalancer

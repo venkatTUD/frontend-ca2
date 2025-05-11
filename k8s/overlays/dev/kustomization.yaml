@@ -4,7 +4,6 @@ namespace: dev
 
 resources:
   - ../../base
-  - istio-gateway.yaml
 
 patches:
   - path: patch-deployment.yaml
