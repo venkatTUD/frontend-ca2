@@ -6,5 +6,7 @@ resources:
   - ../../base
   - ingress.yaml
   - certificate.yaml
-  - patch-service.yaml
-  - patch-deployment.yaml
+
+patches:
+  - path: patch-service.yaml
+  - path: patch-deployment.yaml
