@@ -118,78 +118,97 @@ jobs:
         apiVersion: v1
         kind: ConfigMap
         metadata:
-          name: grafana-datasources
+          name: grafana-provisioning-datasources
           labels:
-            grafana_datasource: "1"
+            app: grafana
         data:
           datasources.yaml: |-
             apiVersion: 1
             datasources:
             - name: Prometheus
               type: prometheus
-              url: http://prometheus:9090
               access: proxy
+              url: http://prometheus:9090
               isDefault: true
+              version: 1
+              editable: false
               jsonData:
                 timeInterval: "30s"
-              version: 1
 
         ---
         apiVersion: v1
         kind: ConfigMap
         metadata:
-          name: grafana-dashboard
+          name: grafana-provisioning-dashboards
           labels:
-            grafana_dashboard: "1"
+            app: grafana
+        data:
+          dashboard-provider.yaml: |-
+            apiVersion: 1
+            providers:
+            - name: 'default'
+              orgId: 1
+              folder: ''
+              type: file
+              disableDeletion: true
+              editable: true
+              options:
+                path: /var/lib/grafana/dashboards
+
+        ---
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: grafana-dashboards
+          labels:
+            app: grafana
         data:
           pod-status.json: |-
             {
               "title": "Pod Status Monitor",
+              "tags": ["kubernetes", "pods"],
+              "timezone": "browser",
               "panels": [
                 {
-                  "title": "Frontend Pod Status",
+                  "title": "Pod Status Overview",
                   "type": "stat",
                   "datasource": "Prometheus",
-                  "gridPos": {"x": 0, "y": 0, "w": 12, "h": 6},
-                  "targets": [{
-                    "expr": "up{job='frontend'}",
-                    "legendFormat": "{{pod}}"
-                  }],
-                  "options": {
-                    "colorMode": "value",
-                    "graphMode": "area",
-                    "thresholds": {
-                      "mode": "absolute",
-                      "steps": [
-                        {"color": "red", "value": null},
-                        {"color": "green", "value": 1}
-                      ]
+                  "gridPos": {"x": 0, "y": 0, "w": 24, "h": 8},
+                  "targets": [
+                    {
+                      "expr": "up{job='frontend'} or up{job='backend'}",
+                      "legendFormat": "{{pod}}",
+                      "refId": "A"
                     }
-                  }
-                },
-                {
-                  "title": "Backend Pod Status",
-                  "type": "stat",
-                  "datasource": "Prometheus",
-                  "gridPos": {"x": 0, "y": 6, "w": 12, "h": 6},
-                  "targets": [{
-                    "expr": "up{job='backend'}",
-                    "legendFormat": "{{pod}}"
-                  }],
+                  ],
                   "options": {
                     "colorMode": "value",
                     "graphMode": "area",
-                    "thresholds": {
-                      "mode": "absolute",
-                      "steps": [
-                        {"color": "red", "value": null},
-                        {"color": "green", "value": 1}
-                      ]
+                    "justifyMode": "auto",
+                    "orientation": "auto",
+                    "reduceOptions": {
+                      "calcs": ["lastNotNull"],
+                      "fields": "",
+                      "values": false
+                    },
+                    "textMode": "auto"
+                  },
+                  "fieldConfig": {
+                    "defaults": {
+                      "color": {
+                        "mode": "thresholds"
+                      },
+                      "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"color": "red", "value": null},
+                          {"color": "green", "value": 1}
+                        ]
+                      }
                     }
                   }
                 }
-              ],
-              "refresh": "30s"
+              ]
             }
         EOF
 
@@ -215,16 +234,39 @@ jobs:
               - name: grafana
                 image: grafana/grafana:8.5.5
                 env:
-                - name: GF_SECURITY_ADMIN_PASSWORD
-                  value: "admin"
                 - name: GF_SECURITY_ADMIN_USER
                   value: "admin"
-                - name: GF_AUTH_DISABLE_LOGIN_FORM
+                - name: GF_SECURITY_ADMIN_PASSWORD
+                  value: "admin"
+                - name: GF_USERS_ALLOW_SIGN_UP
                   value: "false"
                 - name: GF_AUTH_ANONYMOUS_ENABLED
                   value: "true"
                 ports:
                 - containerPort: 3000
+                readinessProbe:
+                  httpGet:
+                    path: /api/health
+                    port: 3000
+                  initialDelaySeconds: 10
+                  periodSeconds: 10
+                  timeoutSeconds: 1
+                livenessProbe:
+                  httpGet:
+                    path: /api/health
+                    port: 3000
+                  initialDelaySeconds: 30
+                  periodSeconds: 10
+                volumeMounts:
+                - name: grafana-datasources
+                  mountPath: /etc/grafana/provisioning/datasources
+                  readOnly: true
+                - name: grafana-dashboards
+                  mountPath: /var/lib/grafana/dashboards
+                  readOnly: true
+                - name: grafana-dashboard-providers
+                  mountPath: /etc/grafana/provisioning/dashboards
+                  readOnly: true
                 resources:
                   limits:
                     cpu: "100m"
@@ -232,20 +274,16 @@ jobs:
                   requests:
                     cpu: "50m"
                     memory: "50Mi"
-                volumeMounts:
-                - name: dashboards
-                  mountPath: /etc/grafana/provisioning/dashboards
-                  readOnly: true
-                - name: datasources
-                  mountPath: /etc/grafana/provisioning/datasources
-                  readOnly: true
               volumes:
-              - name: dashboards
+              - name: grafana-datasources
                 configMap:
-                  name: grafana-dashboard
-              - name: datasources
+                  name: grafana-provisioning-datasources
+              - name: grafana-dashboards
                 configMap:
-                  name: grafana-datasources
+                  name: grafana-dashboards
+              - name: grafana-dashboard-providers
+                configMap:
+                  name: grafana-provisioning-dashboards
         ---
         apiVersion: v1
         kind: Service
@@ -268,3 +306,4 @@ jobs:
         echo "http://$(kubectl get svc -n $NAMESPACE grafana -o jsonpath='{.status.loadBalancer.ingress[0].ip}')"
         echo "Login with admin/admin"
         echo -e "\nDashboard should be automatically available under 'Pod Status Monitor'"
+        echo "If dashboard doesn't appear immediately, wait 1-2 minutes for Grafana to load it"
