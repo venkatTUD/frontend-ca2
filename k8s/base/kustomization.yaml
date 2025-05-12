@@ -6,6 +6,7 @@ resources:
   - service.yaml
   - hpa.yaml
   - network-policy.yaml
+  - pdb.yaml
 # images:
 #   - name: venkatakurathitud/receipt-frontend
 #     newTag: SHORT_SHA  # Will be replaced in workflow
