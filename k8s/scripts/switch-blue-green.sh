@@ -31,41 +31,41 @@ kubectl wait --for=condition=ready pod -l app=receipt-frontend,env=$NEW_ENV -n $
   exit 1
 }
 
-# Switch service selector
-echo "Patching service receipt-frontend-service selector to env: $NEW_ENV"
-kubectl -n $NAMESPACE patch service receipt-frontend-service -p "{\"spec\":{\"selector\":{\"app\":\"receipt-frontend\",\"env\":\"$NEW_ENV\"}}}" || {
-  echo "ERROR: Failed to patch service selector!"
-  kubectl get service receipt-frontend-service -n $NAMESPACE -o yaml
-  exit 1
-}
-echo "Service selector updated."
+# Check if we're in prod namespace (HTTPS enabled)
+if [ "$NAMESPACE" = "prod" ]; then
+  echo "Production environment detected - using Istio for traffic switching..."
+  
+  # Check if Istio DestinationRule exists
+  if kubectl -n $NAMESPACE get destinationrule receipt-frontend-dr &>/dev/null; then
+    # Update Istio DestinationRule to switch active subset
+    echo "Updating Istio DestinationRule to switch active subset to $NEW_ENV..."
+    kubectl -n $NAMESPACE patch destinationrule receipt-frontend-dr --type=json -p "[{\"op\": \"replace\", \"path\": \"/spec/subsets/2/labels/env\", \"value\": \"$NEW_ENV\"}]" || {
+      echo "ERROR: Failed to update Istio DestinationRule!"
+      exit 1
+    }
+    echo "Istio DestinationRule updated."
 
-# Verify service selector
-echo "Verifying service selector..."
-UPDATED_SELECTOR=$(kubectl get service receipt-frontend-service -n $NAMESPACE -o jsonpath='{.spec.selector.env}')
-if [ "$UPDATED_SELECTOR" = "$NEW_ENV" ]; then
-  echo "Service selector set to env=$NEW_ENV"
-else
-  echo "ERROR: Service selector verification failed. Expected env=$NEW_ENV, found env=$UPDATED_SELECTOR"
-  exit 1
-fi
+    # Verify Istio DestinationRule update
+    echo "Verifying Istio DestinationRule update..."
+    ACTIVE_ENV=$(kubectl -n $NAMESPACE get destinationrule receipt-frontend-dr -o jsonpath='{.spec.subsets[2].labels.env}')
+    if [ "$ACTIVE_ENV" = "$NEW_ENV" ]; then
+      echo "Istio DestinationRule active subset set to env=$NEW_ENV"
+    else
+      echo "ERROR: Istio DestinationRule verification failed. Expected env=$NEW_ENV, found env=$ACTIVE_ENV"
+      exit 1
+    fi
 
-# Wait for service endpoints to be ready
-echo "Waiting for service receipt-frontend-service to have endpoints for env=$NEW_ENV..."
-for i in {1..30}; do
-  ENDPOINTS=$(kubectl get endpoints receipt-frontend-service -n $NAMESPACE -o jsonpath='{.subsets[0].addresses}' 2>/dev/null)
-  if [ -n "$ENDPOINTS" ]; then
-    echo "✅ Service endpoints ready: $ENDPOINTS"
-    break
-  elif [ "$i" -eq 30 ]; then
-    echo "ERROR: Service endpoints not ready after 30 attempts."
-    kubectl describe service receipt-frontend-service -n $NAMESPACE
-    exit 1
-  else
-    echo "⌛ Waiting for endpoints (attempt $i/30)..."
+    # Wait for Istio to propagate changes
+    echo "Waiting for Istio to propagate changes..."
     sleep 10
+  else
+    echo "WARNING: Istio DestinationRule not found in prod namespace. Falling back to service selector..."
+    switch_service_selector
   fi
-done
+else
+  echo "Development environment detected - using service selector for traffic switching..."
+  switch_service_selector
+fi
 
 # Scale down old environment
 echo "Scaling down old environment ($OLD_ENV) deployment to 0 replicas"
@@ -75,3 +75,41 @@ kubectl -n $NAMESPACE scale deployment/receipt-frontend-$OLD_ENV --replicas=0 ||
 echo "Old environment scaled down."
 
 echo "--- switch-blue-green.sh script finished ---"
+
+# Function to handle service selector switching
+switch_service_selector() {
+  echo "Patching service receipt-frontend-service selector to env: $NEW_ENV"
+  kubectl -n $NAMESPACE patch service receipt-frontend-service -p "{\"spec\":{\"selector\":{\"app\":\"receipt-frontend\",\"env\":\"$NEW_ENV\"}}}" || {
+    echo "ERROR: Failed to patch service selector!"
+    kubectl get service receipt-frontend-service -n $NAMESPACE -o yaml
+    exit 1
+  }
+  echo "Service selector updated."
+
+  # Verify service selector
+  echo "Verifying service selector..."
+  UPDATED_SELECTOR=$(kubectl get service receipt-frontend-service -n $NAMESPACE -o jsonpath='{.spec.selector.env}')
+  if [ "$UPDATED_SELECTOR" = "$NEW_ENV" ]; then
+    echo "Service selector set to env=$NEW_ENV"
+  else
+    echo "ERROR: Service selector verification failed. Expected env=$NEW_ENV, found env=$UPDATED_SELECTOR"
+    exit 1
+  fi
+
+  # Wait for service endpoints to be ready
+  echo "Waiting for service receipt-frontend-service to have endpoints for env=$NEW_ENV..."
+  for i in {1..30}; do
+    ENDPOINTS=$(kubectl get endpoints receipt-frontend-service -n $NAMESPACE -o jsonpath='{.subsets[0].addresses}' 2>/dev/null)
+    if [ -n "$ENDPOINTS" ]; then
+      echo "✅ Service endpoints ready: $ENDPOINTS"
+      break
+    elif [ "$i" -eq 30 ]; then
+      echo "ERROR: Service endpoints not ready after 30 attempts."
+      kubectl describe service receipt-frontend-service -n $NAMESPACE
+      exit 1
+    else
+      echo "⌛ Waiting for endpoints (attempt $i/30)..."
+      sleep 10
+    fi
+  done
+}

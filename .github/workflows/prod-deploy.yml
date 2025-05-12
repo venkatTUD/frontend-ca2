@@ -1,4 +1,4 @@
-name: Frontend Blue-Green Deployment to dev
+name: Frontend Blue-Green Deployment to Production
 on:
   push:
     branches: ["release/*"]
@@ -19,7 +19,7 @@ jobs:
       packages: write
     steps:
     - name: Checkout code
-      uses: actions/checkout\@v4
+      uses: actions/checkout@v4
     - name: Get short SHA
       id: sha
       run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
@@ -82,7 +82,12 @@ jobs:
         echo "Checking for existing frontend service..."
         if ! kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} --ignore-not-found; then
           echo "Frontend service not found. Performing initial deployment setup."
+          # Apply base configurations
           kubectl apply -k k8s/base -n ${{ env.NAMESPACE }}
+          # Apply cert-manager configurations
+          kubectl apply -f k8s/cert-manager/cluster-issuer.yaml
+          # Apply production overlay
+          kubectl apply -k k8s/overlays/prod -n ${{ env.NAMESPACE }}
           kubectl patch service ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} -p '{"spec":{"selector":{"app":"receipt-frontend","env":"green"}}}'
           echo "Initial setup complete."
           echo "IS_INITIAL_SETUP=true" >> $GITHUB_ENV
@@ -136,15 +141,26 @@ jobs:
         chmod +x ./k8s/scripts/switch-blue-green.sh
         ./k8s/scripts/switch-blue-green.sh ${{ env.NAMESPACE }} ${{ env.INACTIVE_ENV }} ${{ env.ACTIVE_ENV }} ${{ env.SHORT_SHA }}
 
-    - name: Verify Deployment via Istio Gateway and TLS
+    - name: Verify Deployment and TLS
       run: |
-        INGRESS_IP=$(kubectl get svc istio-ingressgateway -n istio-system -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+        # Get the NGINX Ingress IP
+        INGRESS_IP=$(kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
         FRONTEND_URL="https://${INGRESS_IP}.nip.io"
-        echo "🔐 Verifying TLS certificate at $FRONTEND_URL..."
+        
+        echo "🔐 Verifying TLS certificate..."
+        # Wait for certificate to be ready
+        kubectl wait --for=condition=ready certificate receipt-frontend-cert -n ${{ env.NAMESPACE }} --timeout=300s || echo "Certificate not ready yet"
+        
+        # Check certificate status
+        echo "Certificate status:"
+        kubectl get certificate -n ${{ env.NAMESPACE }}
+        
+        echo "🔍 Verifying TLS connection..."
         echo | openssl s_client -connect ${INGRESS_IP}:443 -servername ${INGRESS_IP}.nip.io 2>/dev/null | openssl x509 -noout -dates || echo "❌ TLS cert check failed"
 
         echo "🌐 Verifying application endpoints at $FRONTEND_URL..."
         curl --fail --retry 10 --retry-delay 10 --connect-timeout 15 --max-time 30 "$FRONTEND_URL" || echo "Warning: root check failed"
         curl --fail --retry 10 --retry-delay 10 --connect-timeout 15 --max-time 30 "$FRONTEND_URL/recipes" || echo "Warning: API check failed"
         curl --fail --retry 10 --retry-delay 10 --connect-timeout 15 --max-time 30 "$FRONTEND_URL/metrics" || echo "Warning: metrics check failed"
-        echo "✅ Istio Gateway verification complete"
+        
+        echo "✅ Deployment verification complete"
