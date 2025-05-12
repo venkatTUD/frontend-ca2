@@ -5,4 +5,4 @@ metadata:
 spec:
   selector:
     app: receipt-frontend
-    env: blue  # Start with blue in dev
+    env: green  # Start with green in prod

@@ -4,8 +4,9 @@ namespace: prod
 
 resources:
   - ../../base
-  - istio-gateway.yaml
+  - ingress.yaml
+  - certificate.yaml
 
 patches:
-  - path: patch-deployment.yaml
   - path: patch-service.yaml
+  - path: patch-deployment.yaml

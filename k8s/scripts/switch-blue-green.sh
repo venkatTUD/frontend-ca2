@@ -31,7 +31,7 @@ kubectl wait --for=condition=ready pod -l app=receipt-frontend,env=$NEW_ENV -n $
   exit 1
 }
 
-# Switch service selector
+# Patch service selector to point to the new environment
 echo "Patching service receipt-frontend-service selector to env: $NEW_ENV"
 kubectl -n $NAMESPACE patch service receipt-frontend-service -p "{\"spec\":{\"selector\":{\"app\":\"receipt-frontend\",\"env\":\"$NEW_ENV\"}}}" || {
   echo "ERROR: Failed to patch service selector!"
