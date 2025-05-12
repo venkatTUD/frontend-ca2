@@ -56,7 +56,6 @@ jobs:
                 regex: ([^:]+)(?::\d+)?;(\d+)
                 replacement: \${1}:\${2}
                 target_label: __address__
-
             - job_name: 'backend'
               metrics_path: '/actuator/prometheus'
               kubernetes_sd_configs:
@@ -120,8 +119,10 @@ jobs:
         kind: ConfigMap
         metadata:
           name: grafana-datasources
+          labels:
+            grafana_datasource: "1"
         data:
-          prometheus.yaml: |-
+          datasources.yaml: |-
             apiVersion: 1
             datasources:
             - name: Prometheus
@@ -129,6 +130,9 @@ jobs:
               url: http://prometheus:9090
               access: proxy
               isDefault: true
+              jsonData:
+                timeInterval: "30s"
+              version: 1
 
         ---
         apiVersion: v1
@@ -210,6 +214,15 @@ jobs:
               containers:
               - name: grafana
                 image: grafana/grafana:8.5.5
+                env:
+                - name: GF_SECURITY_ADMIN_PASSWORD
+                  value: "admin"
+                - name: GF_SECURITY_ADMIN_USER
+                  value: "admin"
+                - name: GF_AUTH_DISABLE_LOGIN_FORM
+                  value: "false"
+                - name: GF_AUTH_ANONYMOUS_ENABLED
+                  value: "true"
                 ports:
                 - containerPort: 3000
                 resources:
@@ -223,17 +236,16 @@ jobs:
                 - name: dashboards
                   mountPath: /etc/grafana/provisioning/dashboards
                   readOnly: true
-                - name: config
+                - name: datasources
                   mountPath: /etc/grafana/provisioning/datasources
                   readOnly: true
               volumes:
               - name: dashboards
                 configMap:
                   name: grafana-dashboard
-              - name: config
+              - name: datasources
                 configMap:
                   name: grafana-datasources
-
         ---
         apiVersion: v1
         kind: Service
@@ -248,8 +260,11 @@ jobs:
           type: LoadBalancer
         EOF
 
-    - name: Get Grafana URL
+    - name: Verify Deployment
       run: |
-        echo "Grafana will be available at:"
+        echo "Waiting for Grafana to be ready..."
+        kubectl wait --for=condition=available deployment/grafana -n $NAMESPACE --timeout=120s
+        echo -e "\nGrafana will be available at:"
         echo "http://$(kubectl get svc -n $NAMESPACE grafana -o jsonpath='{.status.loadBalancer.ingress[0].ip}')"
         echo "Login with admin/admin"
+        echo -e "\nDashboard should be automatically available under 'Pod Status Monitor'"
