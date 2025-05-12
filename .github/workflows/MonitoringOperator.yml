@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
 
 env:
-  GKE_CLUSTER: receipt-dev-cluster
+  GKE_CLUSTER_NAME: receipt-dev-cluster
   GKE_REGION: us-central1
   NAMESPACE: dev
 
@@ -11,20 +11,23 @@ jobs:
   deploy-monitoring:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout
+    - name: Checkout code
       uses: actions/checkout@v3
 
-    - name: Auth to GCP
+    - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v1
       with:
         credentials_json: ${{ secrets.GCP_CREDENTIALS }}
 
-    - name: Setup gcloud
+    - name: Set up gcloud
       uses: google-github-actions/setup-gcloud@v1
+      with:
+        project_id: eadtud
+        install_components: 'gke-gcloud-auth-plugin'
 
     - name: Configure kubectl
       run: |
-        gcloud container clusters get-credentials $GKE_CLUSTER --region $GKE_REGION
+        gcloud container clusters get-credentials $GKE_CLUSTER_NAME --region $GKE_REGION
 
     # Prometheus Config
     - name: Deploy Prometheus Config
