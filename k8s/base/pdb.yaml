@@ -1,0 +1,21 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: frontend-blue-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: receipt-frontend
+      version: blue
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: frontend-green-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: receipt-frontend
+      version: green 
