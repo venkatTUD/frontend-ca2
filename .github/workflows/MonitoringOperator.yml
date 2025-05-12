@@ -1,9 +1,9 @@
-name: Deploy Targeted Monitoring to GKE Cluster
+name: Deploy Minimal Pod Monitoring
 on:
   workflow_dispatch:
 
 env:
-  GKE_CLUSTER_NAME: receipt-dev-cluster
+  GKE_CLUSTER: receipt-dev-cluster
   GKE_REGION: us-central1
   NAMESPACE: dev
 
@@ -11,25 +11,23 @@ jobs:
   deploy-monitoring:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
+    - name: Checkout
       uses: actions/checkout@v3
 
-    - name: Authenticate to Google Cloud
+    - name: Auth to GCP
       uses: google-github-actions/auth@v1
       with:
-        credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-    - name: Set up gcloud
+    - name: Setup gcloud
       uses: google-github-actions/setup-gcloud@v1
-      with:
-        project_id: eadtud
-        install_components: 'gke-gcloud-auth-plugin'
 
     - name: Configure kubectl
       run: |
-        gcloud container clusters get-credentials $GKE_CLUSTER_NAME --region $GKE_REGION
+        gcloud container clusters get-credentials $GKE_CLUSTER --region $GKE_REGION
 
-    - name: Deploy Targeted Prometheus
+    # Prometheus Config
+    - name: Deploy Prometheus Config
       run: |
         cat <<EOF | kubectl apply -n $NAMESPACE -f -
         apiVersion: v1
@@ -43,34 +41,36 @@ jobs:
               evaluation_interval: 60s
             
             scrape_configs:
-              - job_name: 'app-pods'
-                kubernetes_sd_configs:
-                - role: pod
-                relabel_configs:
-                # Only scrape pods with prometheus.io/scrape=true
-                - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
-                  action: keep
-                  regex: true
-                # Get the metrics path from annotation
-                - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
-                  target_label: __metrics_path__
-                  regex: (.+)
-                # Get the port from annotation
-                - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
-                  action: replace
-                  regex: ([^:]+)(?::\d+)?;(\d+)
-                  replacement: \$1:\$2
-                  target_label: __address__
-                # Add pod name as label
-                - source_labels: [__meta_kubernetes_pod_name]
-                  target_label: pod
-                # Add app name from labels
-                - source_labels: [__meta_kubernetes_pod_label_app]
-                  target_label: app
-                # Add namespace
-                - source_labels: [__meta_kubernetes_namespace]
-                  target_label: namespace
-        ---
+            - job_name: 'frontend'
+              metrics_path: '/metrics'
+              kubernetes_sd_configs:
+              - role: pod
+              relabel_configs:
+              - source_labels: [__meta_kubernetes_pod_label_app]
+                regex: receipt-frontend
+                action: keep
+              - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+                regex: ([^:]+)(?::\d+)?;(\d+)
+                replacement: \${1}:\${2}
+                target_label: __address__
+
+            - job_name: 'backend'
+              metrics_path: '/actuator/prometheus'
+              kubernetes_sd_configs:
+              - role: pod
+              relabel_configs:
+              - source_labels: [__meta_kubernetes_pod_label_app]
+                regex: receipt-backend
+                action: keep
+              - source_labels: [__address__]
+                target_label: __address__
+                replacement: \${1}:9090
+        EOF
+
+    # Prometheus Deployment
+    - name: Deploy Prometheus
+      run: |
+        cat <<EOF | kubectl apply -n $NAMESPACE -f -
         apiVersion: apps/v1
         kind: Deployment
         metadata:
@@ -90,7 +90,7 @@ jobs:
                 image: prom/prometheus:v2.37.0
                 args:
                 - "--config.file=/etc/prometheus/prometheus.yml"
-                - "--storage.tsdb.retention.time=24h"
+                - "--storage.tsdb.retention.time=12h"
                 ports:
                 - containerPort: 9090
                 resources:
@@ -107,21 +107,87 @@ jobs:
               - name: config-volume
                 configMap:
                   name: prometheus-config
-        ---
-        apiVersion: v1
-        kind: Service
-        metadata:
-          name: prometheus
-        spec:
-          selector:
-            app: prometheus
-          ports:
-          - port: 9090
-            targetPort: 9090
-          type: ClusterIP
         EOF
 
-    - name: Deploy Grafana with App-Specific Dashboard
+    # Grafana Configuration
+    - name: Deploy Grafana Config
+      run: |
+        cat <<EOF | kubectl apply -n $NAMESPACE -f -
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: grafana-datasources
+        data:
+          prometheus.yaml: |-
+            apiVersion: 1
+            datasources:
+            - name: Prometheus
+              type: prometheus
+              url: http://prometheus:9090
+              access: proxy
+              isDefault: true
+
+        ---
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: grafana-dashboard
+          labels:
+            grafana_dashboard: "1"
+        data:
+          pod-status.json: |-
+            {
+              "title": "Pod Status Monitor",
+              "panels": [
+                {
+                  "title": "Frontend Pod Status",
+                  "type": "stat",
+                  "datasource": "Prometheus",
+                  "gridPos": {"x": 0, "y": 0, "w": 12, "h": 6},
+                  "targets": [{
+                    "expr": "up{job='frontend'}",
+                    "legendFormat": "{{pod}}"
+                  }],
+                  "options": {
+                    "colorMode": "value",
+                    "graphMode": "area",
+                    "thresholds": {
+                      "mode": "absolute",
+                      "steps": [
+                        {"color": "red", "value": null},
+                        {"color": "green", "value": 1}
+                      ]
+                    }
+                  }
+                },
+                {
+                  "title": "Backend Pod Status",
+                  "type": "stat",
+                  "datasource": "Prometheus",
+                  "gridPos": {"x": 0, "y": 6, "w": 12, "h": 6},
+                  "targets": [{
+                    "expr": "up{job='backend'}",
+                    "legendFormat": "{{pod}}"
+                  }],
+                  "options": {
+                    "colorMode": "value",
+                    "graphMode": "area",
+                    "thresholds": {
+                      "mode": "absolute",
+                      "steps": [
+                        {"color": "red", "value": null},
+                        {"color": "green", "value": 1}
+                      ]
+                    }
+                  }
+                }
+              ],
+              "refresh": "30s"
+            }
+        EOF
+
+    # Grafana Deployment
+    - name: Deploy Grafana
       run: |
         cat <<EOF | kubectl apply -n $NAMESPACE -f -
         apiVersion: apps/v1
@@ -164,74 +230,7 @@ jobs:
               - name: config
                 configMap:
                   name: grafana-datasources
-        ---
-        apiVersion: v1
-        kind: ConfigMap
-        metadata:
-          name: grafana-datasources
-        data:
-          prometheus.yaml: |-
-            apiVersion: 1
-            datasources:
-            - name: Prometheus
-              type: prometheus
-              url: http://prometheus:9090
-              access: proxy
-              isDefault: true
-        ---
-        apiVersion: v1
-        kind: ConfigMap
-        metadata:
-          name: grafana-dashboard
-          labels:
-            grafana_dashboard: "1"
-        data:
-          app-monitoring.json: |-
-            {
-              "title": "Application Monitoring",
-              "panels": [
-                {
-                  "title": "Pod Status by Application",
-                  "type": "stat",
-                  "datasource": "Prometheus",
-                  "targets": [{
-                    "expr": "up{job=\"app-pods\"}",
-                    "legendFormat": "{{app}}/{{pod}}"
-                  }],
-                  "options": {
-                    "colorMode": "value",
-                    "graphMode": "area",
-                    "thresholds": {
-                      "mode": "absolute",
-                      "steps": [
-                        { "color": "red", "value": null },
-                        { "color": "green", "value": 1 }
-                      ]
-                    }
-                  }
-                },
-                {
-                  "title": "CPU Usage by Application",
-                  "type": "timeseries",
-                  "datasource": "Prometheus",
-                  "targets": [{
-                    "expr": "sum(rate(container_cpu_usage_seconds_total{job=\"app-pods\"}[1m])) by (app, pod)",
-                    "legendFormat": "{{app}}/{{pod}}"
-                  }],
-                  "unit": "percentunit"
-                },
-                {
-                  "title": "Memory Usage by Application",
-                  "type": "timeseries",
-                  "datasource": "Prometheus",
-                  "targets": [{
-                    "expr": "sum(container_memory_working_set_bytes{job=\"app-pods\"}) by (app, pod)",
-                    "legendFormat": "{{app}}/{{pod}}"
-                  }],
-                  "unit": "bytes"
-                }
-              ]
-            }
+
         ---
         apiVersion: v1
         kind: Service
@@ -246,9 +245,8 @@ jobs:
           type: LoadBalancer
         EOF
 
-    - name: Verify Deployment
+    - name: Get Grafana URL
       run: |
-        kubectl get pods -n $NAMESPACE
-        echo -e "\nGrafana will be available at:"
+        echo "Grafana will be available at:"
         echo "http://$(kubectl get svc -n $NAMESPACE grafana -o jsonpath='{.status.loadBalancer.ingress[0].ip}')"
-        echo "Use admin/admin to login"
+        echo "Login with admin/admin"
