@@ -8,3 +8,4 @@ resources:
 patches:
   - path: patch-deployment.yaml
   - path: patch-service.yaml
+  - path: monitoring-patch.yaml
